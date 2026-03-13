@@ -1,5 +1,4 @@
 import type { Metadata, Viewport } from 'next'
-import { Inter } from 'next/font/google'
 import { Analytics } from '@vercel/analytics/next'
 import Script from 'next/script'
 import { Toaster } from '@/components/ui/toaster'
@@ -8,8 +7,6 @@ import { ThemeProvider } from '@/components/theme-provider-custom'
 import { AuthProvider } from '@/lib/contexts/auth-context'
 import { ForbiddenToast } from '@/components/auth/forbidden-toast'
 import './globals.css'
-
-const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
 
 export const metadata: Metadata = {
   title: {
@@ -37,7 +34,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="es">
-      <body className={`${inter.variable} font-sans antialiased`}>
+      <body className="font-sans antialiased">
         {/* Cargamos el WebSdk ANTES de que la página sea interactiva */}
         <Script 
           src="/modules/WebSdk/index.js" 
