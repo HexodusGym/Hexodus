@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
 import { LogOut, UserPlus, Fingerprint } from "lucide-react"
-import { Button } from "@/components/ui/button"
+import { Button } from "@/ui/button"
 import { AuthService } from "@/lib/auth"
 import { useToast } from "@/hooks/use-toast"
 import { NotificacionesBell } from "@/components/notificaciones-bell"

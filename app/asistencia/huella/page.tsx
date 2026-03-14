@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from "react"
 import { Fingerprint, CheckCircle2, XCircle, AlertTriangle, Clock, Wifi, WifiOff, Loader2 } from "lucide-react"
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
+import { Avatar, AvatarFallback, AvatarImage } from "@/ui/avatar"
 import { AuthService } from "@/lib/auth"
 import { sincronizarCacheMotorHuella } from "@/lib/motor-huella"
 import type { HuellaMotorEvent, HuellaMotorEventsResponse } from "@/lib/types/asistencia-huella"

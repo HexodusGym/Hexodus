@@ -1,7 +1,7 @@
 import type { Metadata, Viewport } from 'next'
 import { Analytics } from '@vercel/analytics/next'
 import Script from 'next/script'
-import { Toaster } from '@/components/ui/toaster'
+import { Toaster } from '@/ui/toaster'
 import { CajaGuard } from '@/components/caja/caja-guard'
 import { ThemeProvider } from '@/components/theme-provider-custom'
 import { AuthProvider } from '@/lib/contexts/auth-context'

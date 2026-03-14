@@ -6,7 +6,7 @@ import { LogOut } from "lucide-react"
 import { AuthService } from "@/lib/auth"
 import type { User } from "@/lib/types/auth"
 import { useToast } from "@/hooks/use-toast"
-import { Button } from "@/components/ui/button"
+import { Button } from "@/ui/button"
 import { IndicadorCaja } from "@/components/caja/indicador-caja"
 import { NotificacionesBell } from "@/components/notificaciones-bell"
 
