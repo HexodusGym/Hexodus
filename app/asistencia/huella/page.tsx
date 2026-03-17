@@ -512,7 +512,10 @@ export default function AsistenciaHuellaPage() {
       if (!isMounted.current) return
       programarPollingEventos(0)
 
-      if (!callbackActivoRef.current && !verificacionEnCursoRef.current && !flujoAccesoActivoRef.current) {
+      // Mantener una verificación activa como respaldo incluso cuando existen callbacks.
+      // Si el callback del motor deja de llegar (proxy/red), el flujo no debe quedarse
+      // en "escuchando" indefinidamente sin intentar leer por /comparar.
+      if (!verificacionEnCursoRef.current && !flujoAccesoActivoRef.current) {
         void iniciarVerificacion(true)
       }
     }, delay)
@@ -742,6 +745,7 @@ export default function AsistenciaHuellaPage() {
 
       if (matchSuccess) {
         if (yaSeProcesoReciente(codigoSocioMatch)) {
+          setEstado("idle")
           setProgress(0)
           setMensajeEscaneo("Escuchando el sensor. Coloca tu dedo en cualquier momento.")
           programarEscuchaAutomatica(AUTO_RETRY_DELAY_MS)
@@ -762,6 +766,7 @@ export default function AsistenciaHuellaPage() {
           !huboActividadHuellaRef.current || esMensajeEsperaHuella(mensajeNoCoincidencia)
 
         if (silenciarEspera && esEsperaSilenciosa) {
+          setEstado("idle")
           setProgress(0)
           setMensajeEscaneo("Escuchando el sensor. Coloca tu dedo en cualquier momento.")
           programarEscuchaAutomatica(AUTO_RETRY_DELAY_MS)
