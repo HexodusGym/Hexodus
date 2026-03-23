@@ -29,6 +29,7 @@ import { formatCurrency } from "@/lib/types/ventas"
 import { CajaService } from "@/lib/services/caja"
 import type { CorteCaja as CorteCajaType, GetCortesResponse, Movimiento, CorteDetalle } from "@/lib/types/caja"
 import { useToast } from "@/hooks/use-toast"
+import { DesgloceMetodosKpi } from "@/components/ventas/desglose-metodos-kpi"
 
 // Helper functions para corte de caja (temporal hasta integración con API)
 function getMetodoPagoLabel(metodo: MetodoPago | string): string {
@@ -49,6 +50,38 @@ function getVentasPorMetodo(ventas: Venta[]): { metodo: string; cantidad: number
     .sort((a, b) => b.cantidad - a.cantidad)
 }
 
+function parseFecha(fecha?: string | null): Date | null {
+  if (!fecha) return null
+  if (fecha.toLowerCase().includes("caja abierta")) return null
+
+  const date = new Date(fecha)
+  return Number.isNaN(date.getTime()) ? null : date
+}
+
+function formatFecha(fecha?: string | null, fallback = "Sin fecha"): string {
+  const date = parseFecha(fecha)
+  if (!date) return fallback
+  return date.toLocaleDateString("es-MX")
+}
+
+function formatFechaHora(fecha?: string | null, fallback = "Sin fecha"): string {
+  const date = parseFecha(fecha)
+  if (!date) return fallback
+  return date.toLocaleString("es-MX")
+}
+
+function formatFechaHoraCorta(fecha?: string | null, fallback = "Sin fecha"): string {
+  const date = parseFecha(fecha)
+  if (!date) return fallback
+  return date.toLocaleString("es-MX", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  })
+}
+
 // ====== Types ======
 
 // Usamos los tipos del API directamente
@@ -60,6 +93,82 @@ interface CorteCajaProps {
   fondoInicial: number
   canCrearCorte?: boolean
   canExportar?: boolean
+}
+
+interface MovimientoConsultaRow {
+  id: number
+  fecha: string
+  hora: string
+  concepto: string
+  tipo: string
+  tipoPago: string
+  usuario: string
+  metodo: string
+  ingreso: number
+  egreso: number
+}
+
+interface MetodoResumen {
+  metodo: string
+  ingresos: number
+  egresos: number
+  neto: number
+}
+
+function normalizarMetodoPago(metodo?: string | null): string {
+  const valor = (metodo || "").trim().toLowerCase()
+  if (valor === "") return "N/A"
+  if (valor === "efectivo") return "Efectivo"
+  if (valor === "tarjeta") return "Tarjeta"
+  if (valor === "transferencia") return "Transferencia"
+  if (valor === "otro") return "Otro"
+  return metodo || "N/A"
+}
+
+function esMovimientoApertura(concepto?: string | null): boolean {
+  const valor = (concepto || "").trim().toLowerCase()
+  return (
+    valor.includes("apertura") ||
+    valor.includes("fondo de caja")
+  )
+}
+
+function agruparMovimientosPorMetodo(
+  movimientos: Array<{ metodo?: string | null; tipo?: string; ingreso?: number; egreso?: number; monto?: number; concepto?: string | null }>
+): MetodoResumen[] {
+  const metodosMap = new Map<string, { ingresos: number; egresos: number }>()
+
+  movimientos.forEach((mov) => {
+    // La apertura/fondo inicial no debe formar parte del desglose por método.
+    if (esMovimientoApertura(mov.concepto)) {
+      return
+    }
+
+    const metodo = normalizarMetodoPago(mov.metodo)
+    const tipo = String(mov.tipo ?? "").toLowerCase()
+    let ingreso = Number(mov.ingreso ?? 0)
+    let egreso = Number(mov.egreso ?? 0)
+
+    if (ingreso === 0 && egreso === 0 && mov.monto != null) {
+      const monto = Number(mov.monto)
+      if (tipo === "ingreso") ingreso = monto
+      if (tipo === "egreso" || tipo === "gasto") egreso = monto
+    }
+
+    const actual = metodosMap.get(metodo) ?? { ingresos: 0, egresos: 0 }
+    actual.ingresos += ingreso
+    actual.egresos += egreso
+    metodosMap.set(metodo, actual)
+  })
+
+  return Array.from(metodosMap.entries())
+    .map(([metodo, valores]) => ({
+      metodo,
+      ingresos: valores.ingresos,
+      egresos: valores.egresos,
+      neto: valores.ingresos - valores.egresos,
+    }))
+    .sort((a, b) => b.neto - a.neto)
 }
 
 // ====== Main Component ======
@@ -134,7 +243,6 @@ export function CorteCaja({
     }
   }, [filtroFechaInicio, filtroFechaFin, pagination.current_page, toast])
 
-  // Cargar cortes al montar el componente
   useEffect(() => {
     cargarCortes()
   }, [])
@@ -212,7 +320,7 @@ export function CorteCaja({
     const rows = cortes.map((c) => [
       c.folio,
       c.fechaInicio,
-      c.fechaFin,
+      c.fechaFin ?? "Caja abierta",
       c.ingresos.toFixed(2),
       c.egresos.toFixed(2),
       c.cajaInicial.toFixed(2),
@@ -416,10 +524,9 @@ export function CorteCaja({
                 ) : (
                   cortes.map((corte) => {
                     const isSelected = selectedCorte?.id === corte.id
-                    // Formatear fechas
-                    const fechaInicio = new Date(corte.fechaInicio).toLocaleDateString("es-MX")
-                    const fechaFin = new Date(corte.fechaFin).toLocaleDateString("es-MX")
-                    const fechaCreacion = new Date(corte.fechaCreacion).toLocaleString("es-MX")
+                    const fechaInicio = formatFecha(corte.fechaInicio)
+                    const fechaFin = formatFecha(corte.fechaFin, "Caja abierta")
+                    const fechaCreacion = formatFechaHora(corte.fechaCreacion)
                     
                     return (
                       <tr
@@ -506,105 +613,7 @@ export function CorteCaja({
         )}
       </div>
 
-      {/* Summary Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        {/* Efectivo en Caja */}
-        <div
-          className="bg-card rounded-xl p-4 relative overflow-hidden"
-          style={{ boxShadow: "0 4px 15px rgba(0,0,0,0.3)" }}
-        >
-          <div className="absolute top-0 left-0 right-0 h-[3px]" style={{ background: "#4BB543" }} />
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-[10px] text-muted-foreground uppercase tracking-wider">Efectivo en Caja</span>
-            <DollarSign className="h-4 w-4 text-success" />
-          </div>
-          {loading ? (
-            <div className="flex items-center py-2">
-              <Loader2 className="h-6 w-6 text-success animate-spin" />
-            </div>
-          ) : (
-            <>
-              <p className="text-xl font-bold text-success">
-                {formatCurrency(dashboardStats?.efectivo_caja.total ?? efectivoEnCaja)}
-              </p>
-              <div className="flex items-center gap-3 mt-2 text-[10px] text-muted-foreground">
-                <span className="flex items-center gap-1">
-                  <ArrowDownRight className="h-3 w-3" />
-                  Fondo: {formatCurrency(dashboardStats?.efectivo_caja.fondo ?? fondoInicial)}
-                </span>
-                <span className="flex items-center gap-1">
-                  <ArrowUpRight className="h-3 w-3 text-success" />
-                  {dashboardStats && dashboardStats.efectivo_caja.variacion >= 0 ? "+" : ""}
-                  {formatCurrency(dashboardStats?.efectivo_caja.variacion ?? totalEfectivo)}
-                </span>
-              </div>
-            </>
-          )}
-        </div>
 
-        {/* Total Hoy */}
-        <div
-          className="bg-card rounded-xl p-4 relative overflow-hidden"
-          style={{ boxShadow: "0 4px 15px rgba(0,0,0,0.3)" }}
-        >
-          <div className="absolute top-0 left-0 right-0 h-[3px] bg-primary" />
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-[10px] text-muted-foreground uppercase tracking-wider">Total Hoy</span>
-            <Receipt className="h-4 w-4 text-primary" />
-          </div>
-          {loading ? (
-            <div className="flex items-center py-2">
-              <Loader2 className="h-6 w-6 text-primary animate-spin" />
-            </div>
-          ) : (
-            <>
-              <p className="text-xl font-bold text-primary">
-                {formatCurrency(
-                  dashboardStats?.total_hoy.total ?? ventasHoy.reduce((s, v) => s + v.total, 0)
-                )}
-              </p>
-              <p className="text-[10px] text-muted-foreground mt-2">
-                {dashboardStats?.total_hoy.transacciones ?? ventasHoy.length} transacciones
-              </p>
-            </>
-          )}
-        </div>
-
-        {/* Cortes Realizados */}
-        <div
-          className="bg-card rounded-xl p-4 relative overflow-hidden"
-          style={{ boxShadow: "0 4px 15px rgba(0,0,0,0.3)" }}
-        >
-          <div className="absolute top-0 left-0 right-0 h-[3px] bg-accent" />
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-[10px] text-muted-foreground uppercase tracking-wider">Cortes Realizados</span>
-            <Calendar className="h-4 w-4 text-accent" />
-          </div>
-          {loading ? (
-            <div className="flex items-center py-2">
-              <Loader2 className="h-6 w-6 text-accent animate-spin" />
-            </div>
-          ) : (
-            <>
-              <p className="text-xl font-bold text-accent">
-                {dashboardStats?.cortes_realizados.total ?? cortes.length}
-              </p>
-              <p className="text-[10px] text-muted-foreground mt-2">
-                Ultimo:{" "}
-                {dashboardStats?.cortes_realizados.ultimo
-                  ? new Date(dashboardStats.cortes_realizados.ultimo).toLocaleString("es-MX", {
-                      year: "numeric",
-                      month: "2-digit",
-                      day: "2-digit",
-                      hour: "2-digit",
-                      minute: "2-digit",
-                    })
-                  : cortes[0]?.fechaCreacion || "N/A"}
-              </p>
-            </>
-          )}
-        </div>
-      </div>
 
       {/* Nuevo Corte Modal */}
       {showNuevoModal && (
@@ -649,11 +658,16 @@ function NuevoCorteModal({
   const [observacion, setObservacion] = useState("")
   const [consulted, setConsulted] = useState(false)
   const [loading, setLoading] = useState(false)
-  const [movimientos, setMovimientos] = useState<Movimiento[]>([])
+  const [movimientos, setMovimientos] = useState<MovimientoConsultaRow[]>([])
   const [ingresos, setIngresos] = useState(0)
   const [egresos, setEgresos] = useState(0)
   const [efectivoInicial, setEfectivoInicial] = useState(0)
   const [efectivoFinal, setEfectivoFinal] = useState(0)
+
+  const metodosNuevoCorte = useMemo(() => {
+    if (!consulted || movimientos.length === 0) return []
+    return agruparMovimientosPorMetodo(movimientos)
+  }, [consulted, movimientos])
 
   const handleConsultar = useCallback(async () => {
     setLoading(true)
@@ -670,16 +684,20 @@ function NuevoCorteModal({
       // Adaptar MovimientoCaja a estructura UI
       const movs = response.movimientos.map((m: any) => {
         const fecha = new Date(m.fecha)
+        const tipoNormalizado = String(m.tipo ?? "").toLowerCase()
+        const monto = Number(m.monto ?? 0)
+        const esIngreso = tipoNormalizado === "ingreso"
         return {
           id: m.id,
           fecha: fecha.toLocaleDateString("es-MX"),
           hora: fecha.toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit" }),
           concepto: m.concepto,
           tipo: m.tipo,
-          tipoPago: m.tipo === "ingreso" ? "Ingreso" : "Egreso",
+          tipoPago: esIngreso ? "Ingreso" : "Egreso",
           usuario: m.usuario,
-          ingreso: m.tipo === "ingreso" ? m.monto : 0,
-          egreso: m.tipo === "egreso" ? m.monto : 0,
+          metodo: m.metodo,
+          ingreso: esIngreso ? monto : 0,
+          egreso: esIngreso ? 0 : monto,
         }
       })
       
@@ -883,6 +901,12 @@ function NuevoCorteModal({
               </div>
             </div>
 
+            {metodosNuevoCorte.length > 0 && (
+              <div className="mb-4">
+                <DesgloceMetodosKpi metodos={metodosNuevoCorte} />
+              </div>
+            )}
+
             {/* Movimientos Table */}
             <div className="bg-background rounded-lg overflow-hidden">
               {!consulted ? (
@@ -917,6 +941,9 @@ function NuevoCorteModal({
                           Tipo de pago
                         </th>
                         <th className="px-3 py-2.5 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
+                          Método
+                        </th>
+                        <th className="px-3 py-2.5 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
                           Usuario
                         </th>
                         <th className="px-3 py-2.5 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider text-right">
@@ -938,6 +965,11 @@ function NuevoCorteModal({
                           </td>
                           <td className="px-3 py-2 text-xs text-foreground">{m.concepto}</td>
                           <td className="px-3 py-2 text-xs text-foreground">{m.tipoPago}</td>
+                          <td className="px-3 py-2 text-xs text-foreground">
+                            <span className="bg-muted px-2 py-1 rounded-sm text-[9px] font-medium">
+                              {m.metodo || "N/A"}
+                            </span>
+                          </td>
                           <td className="px-3 py-2 text-xs text-foreground">{m.usuario}</td>
                           <td className="px-3 py-2 text-xs font-semibold text-right">
                             <span className={m.ingreso > 0 ? "text-success" : "text-muted-foreground"}>
@@ -993,6 +1025,11 @@ function DetalleCorteModal({
   corte: CorteDetalle
   onClose: () => void
 }) {
+  const metodosDetalleCorte = useMemo(() => {
+    if (!corte.movimientos || corte.movimientos.length === 0) return []
+    return agruparMovimientosPorMetodo(corte.movimientos)
+  }, [corte.movimientos])
+
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center pt-8 px-4 pb-8 overflow-y-auto">
       <div className="fixed inset-0 bg-background/85 backdrop-blur-sm" onClick={onClose} />
@@ -1021,13 +1058,13 @@ function DetalleCorteModal({
             <div className="bg-background rounded-lg p-3">
               <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Fecha Inicio</p>
               <p className="text-sm font-medium text-foreground">
-                {new Date(corte.fechaInicio).toLocaleString("es-MX")}
+                {formatFechaHora(corte.fechaInicio)}
               </p>
             </div>
             <div className="bg-background rounded-lg p-3">
               <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Fecha Final</p>
               <p className="text-sm font-medium text-foreground">
-                {new Date(corte.fechaFin).toLocaleString("es-MX")}
+                {formatFechaHora(corte.fechaFin, "Caja abierta")}
               </p>
             </div>
             <div className="bg-background rounded-lg p-3">
@@ -1037,7 +1074,7 @@ function DetalleCorteModal({
             <div className="bg-background rounded-lg p-3">
               <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Creado</p>
               <p className="text-sm font-medium text-foreground">
-                {new Date(corte.creado).toLocaleString("es-MX")}
+                {formatFechaHora(corte.creado)}
               </p>
             </div>
           </div>
@@ -1061,6 +1098,12 @@ function DetalleCorteModal({
               <p className="text-lg font-bold text-accent">{formatCurrency(corte.cajaFinal)}</p>
             </div>
           </div>
+
+          {metodosDetalleCorte.length > 0 && (
+            <div className="mb-5">
+              <DesgloceMetodosKpi metodos={metodosDetalleCorte} />
+            </div>
+          )}
 
           {/* Observacion */}
           {corte.observaciones && (
@@ -1096,6 +1139,9 @@ function DetalleCorteModal({
                       <th className="px-3 py-2 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
                         Usuario
                       </th>
+                      <th className="px-3 py-2 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
+                        Método
+                      </th>
                       <th className="px-3 py-2 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider text-center">
                         Tipo
                       </th>
@@ -1114,16 +1160,15 @@ function DetalleCorteModal({
                           {m.folioMovimiento}
                         </td>
                         <td className="px-3 py-2 text-xs text-foreground whitespace-nowrap">
-                          {new Date(m.fecha).toLocaleString("es-MX", {
-                            year: "numeric",
-                            month: "2-digit",
-                            day: "2-digit",
-                            hour: "2-digit",
-                            minute: "2-digit",
-                          })}
+                          {formatFechaHoraCorta(m.fecha)}
                         </td>
                         <td className="px-3 py-2 text-xs text-foreground">{m.concepto}</td>
                         <td className="px-3 py-2 text-xs text-foreground">{m.usuario}</td>
+                        <td className="px-3 py-2 text-xs text-foreground">
+                          <span className="bg-muted px-2 py-1 rounded-sm text-[9px] font-medium">
+                            {m.metodo || "N/A"}
+                          </span>
+                        </td>
                         <td className="px-3 py-2 text-xs font-semibold text-center">
                           <span
                             className={`px-2 py-0.5 rounded-full text-[10px] uppercase ${
