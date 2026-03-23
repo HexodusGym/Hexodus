@@ -1,4 +1,3 @@
-
 import { apiGet, apiPost, apiPut, apiPatch, apiDelete, ApiError } from '@/lib/api'
 import type {
   Producto,

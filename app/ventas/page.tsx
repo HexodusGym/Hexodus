@@ -450,8 +450,10 @@ export default function VentasPage() {
         <VentasHeader />
 
         <div className="flex-1 overflow-y-auto px-4 py-3 md:px-6 space-y-3">
-          {/* KPIs */}
-          <KpiCards data={kpiData} />
+          {/* KPIs - Dinámicos según tab */}
+          {activeTab !== "caja" && (
+            <KpiCards data={kpiData} />
+          )}
 
           {/* Summary Bar */}
           {summaryBar && (
