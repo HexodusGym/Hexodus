@@ -71,17 +71,23 @@ export default function ConfiguracionPage() {
     try {
       // Si estamos en el tab de Datos del Ticket, guardar en el backend
       if (activeTab === "datosTicket") {
+        const logoFueEliminado = Boolean(savedConfig.gimnasioLogo) && !config.gimnasioLogo
+
+        if (logoFueEliminado) {
+          await ConfiguracionService.eliminarLogoTicket()
+        }
+
         const configGimnasio = {
           gimnasioNombre: config.gimnasioNombre,
           gimnasioDomicilio: config.gimnasioDomicilio,
           gimnasioTelefono: config.gimnasioTelefono,
           gimnasioRFC: config.gimnasioRFC,
-          gimnasioLogo: config.gimnasioLogo,
           ticketFooter: config.ticketFooter,
           ticketMensajeAgradecimiento: config.ticketMensajeAgradecimiento,
-        }
+          ...(config.gimnasioLogo ? { gimnasioLogo: config.gimnasioLogo } : {}),
+        } satisfies Parameters<typeof ConfiguracionService.actualizarSoloTicket>[0]
         
-        await ConfiguracionService.guardarConfiguracion(configGimnasio)
+        await ConfiguracionService.actualizarSoloTicket(configGimnasio)
       }
 
       // Guardar en estado local
@@ -96,27 +102,68 @@ export default function ConfiguracionPage() {
     }
   }, [config, activeTab])
 
-  const handleRestablecer = useCallback(() => {
-    // Si estamos en el tab de apariencia, usar el servicio de tema
-    if (activeTab === "apariencia") {
-      ThemeService.restablecerTema()
-      setNotification({ message: "Tema restablecido a valores por defecto", type: "info" })
-      setTimeout(() => setNotification(null), 3000)
-      return
-    }
-    
+  const handleRestablecer = useCallback(async () => {
     // Si estamos en el tab de roles, no hacer nada (el tab maneja su propia lógica)
     if (activeTab === "roles") {
       setNotification({ message: "Los roles del sistema no se pueden restablecer", type: "info" })
       setTimeout(() => setNotification(null), 3000)
       return
     }
-    
-    // Para otros tabs, restablecer config normal
-    setConfig({ ...defaultConfig })
-    setSavedConfig({ ...defaultConfig })
-    setNotification({ message: "Configuracion restablecida a valores por defecto", type: "info" })
-    setTimeout(() => setNotification(null), 3000)
+
+    setLoading(true)
+
+    try {
+      const response = await ConfiguracionService.restablecerSistema()
+      const data = response.data
+
+      ThemeService.guardarTema(
+        {
+          colorPrincipal: data.colorPrincipal,
+          colorSecundario: data.colorSecundario,
+          modoTema: data.modoTema,
+          nombreSistema: data.nombreSistema,
+          logoSistema: data.logoSistema,
+        },
+        { skipRemoteSync: true }
+      )
+
+      setConfig((prev) => ({
+        ...prev,
+        colorPrincipal: data.colorPrincipal,
+        colorSecundario: data.colorSecundario,
+        modoTema: data.modoTema,
+        nombreSistema: data.nombreSistema,
+        gimnasioNombre: data.gimnasioNombre,
+        gimnasioDomicilio: data.gimnasioDomicilio,
+        gimnasioTelefono: data.gimnasioTelefono,
+        gimnasioRFC: data.gimnasioRFC,
+        gimnasioLogo: data.gimnasioLogo || "",
+        ticketFooter: data.ticketFooter,
+        ticketMensajeAgradecimiento: data.ticketMensajeAgradecimiento,
+      }))
+
+      setSavedConfig((prev) => ({
+        ...prev,
+        colorPrincipal: data.colorPrincipal,
+        colorSecundario: data.colorSecundario,
+        modoTema: data.modoTema,
+        nombreSistema: data.nombreSistema,
+        gimnasioNombre: data.gimnasioNombre,
+        gimnasioDomicilio: data.gimnasioDomicilio,
+        gimnasioTelefono: data.gimnasioTelefono,
+        gimnasioRFC: data.gimnasioRFC,
+        gimnasioLogo: data.gimnasioLogo || "",
+        ticketFooter: data.ticketFooter,
+        ticketMensajeAgradecimiento: data.ticketMensajeAgradecimiento,
+      }))
+
+      setNotification({ message: response.message || "Configuracion restablecida a valores de fabrica", type: "info" })
+    } catch (error: any) {
+      setNotification({ message: error.message || "Error al restablecer la configuracion", type: "error" })
+    } finally {
+      setLoading(false)
+      setTimeout(() => setNotification(null), 3000)
+    }
   }, [activeTab])
 
   return (
@@ -173,7 +220,7 @@ export default function ConfiguracionPage() {
         <div
           className={`
             fixed top-5 right-5 z-50 px-5 py-3 rounded-lg text-sm font-medium text-foreground
-            shadow-lg border-l-4 animate-slide-in-right max-w-[350px]
+            shadow-lg border-l-4 animate-slide-in-right max-w-87.5
             ${notification.type === "success" ? "bg-[#22c55e] border-[#15803d]" : ""}
             ${notification.type === "error" ? "bg-destructive border-destructive" : ""}
             ${notification.type === "info" ? "bg-accent border-accent" : ""}
