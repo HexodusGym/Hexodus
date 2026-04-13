@@ -11,9 +11,10 @@ import { InsightsReportes } from "@/reportes/insights-reportes"
 import { DesgloseIngresos } from "@/reportes/desglose-ingresos"
 import { HistorialReportes, type ReporteHistorial } from "@/reportes/historial-reportes"
 import { GenerarReporteModal, type ReporteConfig } from "@/reportes/generar-reporte-modal"
-import { formatCurrency, type TipoReporte } from "@/lib/reportes-data"
+import { ReportePreviewModal } from "@/reportes/reporte-preview-modal"
+import { type TipoReporte } from "@/lib/reportes-data"
+import { getTodayYmdInTimeZone, startOfMonthYmd, startOfWeekYmd } from "@/lib/timezone"
 import { ReportesService } from "@/lib/services/reportes"
-import { exportReporteFinancieroToCSV } from "@/lib/export-excel"
 import { useToast } from "@/hooks/use-toast"
 import { useAuthContext } from "@/lib/contexts/auth-context"
 
@@ -30,15 +31,75 @@ function getPeriodoLabel(periodo: string): string {
   return labels[periodo] ?? periodo
 }
 
+type FormatoExportacion = "XLSX" | "PDF" | "CSV"
+type ReportesTabKey = "resumen" | "graficas" | "comparaciones" | "historial"
+
+function formatUtcYmd(date: Date): string {
+  const y = date.getUTCFullYear()
+  const m = String(date.getUTCMonth() + 1).padStart(2, "0")
+  const d = String(date.getUTCDate()).padStart(2, "0")
+  return `${y}-${m}-${d}`
+}
+
+function getRangoPorPeriodo(periodo: string, fechaInicio: string, fechaFin: string): { inicio: string; fin: string } {
+  const hoy = getTodayYmdInTimeZone()
+
+  if (periodo === "personalizado") {
+    return { inicio: fechaInicio, fin: fechaFin }
+  }
+
+  if (periodo === "dia") {
+    return { inicio: hoy, fin: hoy }
+  }
+
+  if (periodo === "semana") {
+    return { inicio: startOfWeekYmd(hoy), fin: hoy }
+  }
+
+  if (periodo === "mes") {
+    return { inicio: startOfMonthYmd(hoy), fin: hoy }
+  }
+
+  const [year, month] = hoy.split("-").map(Number)
+
+  if (periodo === "trimestre") {
+    const quarterStartMonth = Math.floor((month - 1) / 3) * 3
+    return {
+      inicio: formatUtcYmd(new Date(Date.UTC(year, quarterStartMonth, 1))),
+      fin: hoy,
+    }
+  }
+
+  if (periodo === "semestre") {
+    const semesterStartMonth = month <= 6 ? 0 : 6
+    return {
+      inicio: formatUtcYmd(new Date(Date.UTC(year, semesterStartMonth, 1))),
+      fin: hoy,
+    }
+  }
+
+  if (periodo === "anual") {
+    return {
+      inicio: `${year}-01-01`,
+      fin: hoy,
+    }
+  }
+
+  return { inicio: hoy, fin: hoy }
+}
+
 export default function ReportesPage() {
   const { toast } = useToast()
   const { tienePermiso } = useAuthContext()
   const [periodo, setPeriodo] = useState("dia")
   const [tipoReporte, setTipoReporte] = useState<TipoReporte | "todos">("todos")
+  const [formatoExportacion, setFormatoExportacion] = useState<FormatoExportacion>("XLSX")
   const [fechaInicio, setFechaInicio] = useState("")
   const [fechaFin, setFechaFin] = useState("")
-  const [activeTab, setActiveTab] = useState<"resumen" | "graficas" | "comparaciones" | "historial">("resumen")
+  const [activeTab, setActiveTab] = useState<ReportesTabKey>("resumen")
   const [modalGenerar, setModalGenerar] = useState(false)
+  const [modalPreviewOpen, setModalPreviewOpen] = useState(false)
+  const [reportePreview, setReportePreview] = useState<ReporteHistorial | null>(null)
   const [reportesHistorial, setReportesHistorial] = useState<ReporteHistorial[]>([])
 
   // Estados para datos del backend - Gráficas
@@ -55,7 +116,9 @@ export default function ReportesPage() {
   const [comparacionesData, setComparacionesData] = useState<any>(null)
   const [loadingComparaciones, setLoadingComparaciones] = useState(false)
   const [errorComparaciones, setErrorComparaciones] = useState<string | null>(null)
-  const [tabComparacion, setTabComparacion] = useState("mes") // mes, trimestre, semestre, anual
+  const [comparacionesLabelActual, setComparacionesLabelActual] = useState("Periodo actual")
+  const [comparacionesLabelAnterior, setComparacionesLabelAnterior] = useState("Periodo anterior")
+  const [comparacionesInsights, setComparacionesInsights] = useState<Array<{ tipo: string; texto: string }>>([])
 
   // Estados para datos del backend - Historial
   const [loadingHistorial, setLoadingHistorial] = useState(false)
@@ -70,12 +133,12 @@ export default function ReportesPage() {
   const puedeGenerar = tienePermiso("reportes", "generar")
   const puedeEliminarHistorial = tienePermiso("reportes", "eliminar")
 
-  const tabsDisponibles = [
+  const tabsDisponibles: Array<{ key: ReportesTabKey; label: string }> = [
     { key: "resumen", label: "Resumen General" },
-    ...(puedeVerGraficas ? [{ key: "graficas", label: "Graficas" }] : []),
-    ...(puedeVerComparaciones ? [{ key: "comparaciones", label: "Comparaciones" }] : []),
-    ...(puedeVerHistorial ? [{ key: "historial", label: "Historial" }] : []),
-  ] as const
+  ]
+  if (puedeVerGraficas) tabsDisponibles.push({ key: "graficas", label: "Graficas" })
+  if (puedeVerComparaciones) tabsDisponibles.push({ key: "comparaciones", label: "Comparaciones" })
+  if (puedeVerHistorial) tabsDisponibles.push({ key: "historial", label: "Historial" })
 
   useEffect(() => {
     if (!tabsDisponibles.some((tab) => tab.key === activeTab)) {
@@ -181,24 +244,35 @@ export default function ReportesPage() {
             const desglose = response.data.desglose_ingresos
             
             // Calcular valores anteriores a partir del porcentaje de cambio
-            const calcularAnterior = (actual: number, porcentaje: number): number => {
+            const toNumberSafe = (value: unknown): number => {
+              const n = Number(value)
+              return Number.isFinite(n) ? n : 0
+            }
+
+            const calcularAnterior = (actualRaw: unknown, porcentajeRaw: unknown): number => {
+              const actual = toNumberSafe(actualRaw)
+              const porcentaje = toNumberSafe(porcentajeRaw)
               if (porcentaje === 0) return actual
-              return actual / (1 + porcentaje / 100)
+              const divisor = 1 + porcentaje / 100
+              if (!Number.isFinite(divisor) || divisor === 0) return 0
+              return actual / divisor
             }
             
             setResumenData({
-              ventas_actual: desglose.grafica.ventas.total,
+              ingresos_actual: toNumberSafe(kpis?.ingresos?.total),
+              ingresos_anterior: calcularAnterior(kpis?.ingresos?.total, kpis?.ingresos?.porcentaje),
+              ventas_actual: toNumberSafe(desglose?.grafica?.ventas?.total),
               ventas_anterior: calcularAnterior(
-                desglose.grafica.ventas.total, 
-                desglose.grafica.ventas.porcentaje_vs_anterior
+                desglose?.grafica?.ventas?.total,
+                desglose?.grafica?.ventas?.porcentaje_vs_anterior
               ),
-              gastos_actual: kpis.gastos.total,
-              gastos_anterior: calcularAnterior(kpis.gastos.total, kpis.gastos.porcentaje),
-              utilidad_actual: kpis.utilidad_neta.total,
-              utilidad_anterior: calcularAnterior(kpis.utilidad_neta.total, kpis.utilidad_neta.porcentaje),
-              membresias_actual: kpis.membresias.total,
-              membresias_anterior: calcularAnterior(kpis.membresias.total, kpis.membresias.porcentaje),
-              socios_activos: kpis.membresias.socios_activos,
+              gastos_actual: toNumberSafe(kpis?.gastos?.total),
+              gastos_anterior: calcularAnterior(kpis?.gastos?.total, kpis?.gastos?.porcentaje),
+              utilidad_actual: toNumberSafe(kpis?.utilidad_neta?.total),
+              utilidad_anterior: calcularAnterior(kpis?.utilidad_neta?.total, kpis?.utilidad_neta?.porcentaje),
+              membresias_actual: toNumberSafe(kpis?.membresias?.total),
+              membresias_anterior: calcularAnterior(kpis?.membresias?.total, kpis?.membresias?.porcentaje),
+              socios_activos: toNumberSafe(kpis?.membresias?.socios_activos),
             })
           } else {
             // Formato legacy o diferente
@@ -228,12 +302,16 @@ export default function ReportesPage() {
       try {
         console.log('📊 Cargando comparaciones con filtros:', {
           periodo,
-          tabComparacion,
+          tabComparacion: periodo,
+          fechaInicio,
+          fechaFin,
         })
 
         const response = await ReportesService.getComparaciones({
           periodo,
-          tabSeleccionada: tabComparacion,
+          tabSeleccionada: periodo,
+          fechaInicio: periodo === 'personalizado' ? fechaInicio : undefined,
+          fechaFin: periodo === 'personalizado' ? fechaFin : undefined,
         })
 
         // Si no hay token, mostrar como error
@@ -270,6 +348,9 @@ export default function ReportesPage() {
           ]
           
           setComparacionesData(arrayComparaciones)
+          setComparacionesInsights(response.data.insights ?? [])
+          setComparacionesLabelActual(response.filtros_aplicados?.periodo ?? 'Periodo actual')
+          setComparacionesLabelAnterior(response.data.titulo_grafica ?? 'Periodo anterior')
           console.log('✅ Comparaciones transformadas y cargadas exitosamente')
           console.log('   Título:', response.data.titulo_grafica)
           console.log('   Positivos:', response.data.resumen_indicadores.positivos)
@@ -279,6 +360,7 @@ export default function ReportesPage() {
       } catch (error: any) {
         console.error('❌ Error cargando comparaciones:', error)
         setErrorComparaciones(error.message || 'Error al cargar las comparaciones')
+        setComparacionesInsights([])
       } finally {
         setLoadingComparaciones(false)
       }
@@ -292,7 +374,7 @@ export default function ReportesPage() {
     }
 
     cargarComparaciones()
-  }, [periodo, tabComparacion, puedeVerComparaciones])
+  }, [periodo, fechaInicio, fechaFin, puedeVerComparaciones])
 
   // ------ Effect para cargar historial de reportes desde backend ------
   useEffect(() => {
@@ -334,21 +416,36 @@ export default function ReportesPage() {
             setReportesHistorial([])
           } else {
             // Transformar reportes del backend al formato del componente
-            const reportesTransformados = response.data.reportes.map((reporte) => ({
-              id: reporte.id,
-              nombre: reporte.nombre,
-              tipo: reporte.tipo,
-              periodo: reporte.periodo,
-              fechaGenerado: reporte.fecha_generado,
-              estado: reporte.estado,
-              formato: reporte.formato,
-              resumen: reporte.resumen,
-            }))
+            const reportesTransformados: ReporteHistorial[] = response.data.reportes.map((reporte) => {
+              const estado: ReporteHistorial["estado"] =
+                reporte.estado === "descargado" ? "descargado" : "generado"
+
+              const formatoRaw = String(reporte.formato ?? "").toUpperCase()
+              const formato: ReporteHistorial["formato"] =
+                formatoRaw === "CSV" || formatoRaw === "XLSX" || formatoRaw === "PDF" || formatoRaw === "EXCEL"
+                  ? formatoRaw
+                  : "PDF"
+
+              return {
+                id: String(reporte.id),
+                nombre: reporte.nombre,
+                tipo: reporte.tipo,
+                periodo: reporte.periodo,
+                fechaGenerado: reporte.fecha_generacion || reporte.fecha_generado || "",
+                estado,
+                formato,
+                resumen: reporte.resumen || {
+                  ventas: 0,
+                  gastos: 0,
+                  utilidad: 0,
+                },
+              }
+            })
             
             setReportesHistorial(reportesTransformados)
             console.log('✅ Historial transformado y cargado exitosamente')
             console.log('   Total:', response.data.paginacion?.total || 0, 'reportes')
-            console.log('   Página:', response.data.paginacion?.page || 1, 'de', response.data.paginacion?.totalPages || 1)
+            console.log('   Página:', response.data.paginacion?.page || response.data.paginacion?.pagina || 1, 'de', response.data.paginacion?.totalPages || response.data.paginacion?.totalPaginas || 1)
           }
         }
       } catch (error: any) {
@@ -383,113 +480,123 @@ export default function ReportesPage() {
     setFechaFin("")
   }, [])
 
-  const handleExportar = useCallback(() => {
-    if (!resumenData || !graficasData) {
+  const handleExportar = useCallback(async () => {
+    if (periodo === "personalizado" && (!fechaInicio || !fechaFin)) {
       toast({
         variant: "destructive",
-        title: "Sin datos cargados",
-        description: "Espera a que terminen de cargar los datos para exportar.",
+        title: "Completa el rango personalizado",
+        description: "Selecciona fecha inicio y fecha fin para exportar este reporte.",
       })
       return
     }
 
-    const nombreReporte = getPeriodoLabel(periodo)
-    try {
-      exportReporteFinancieroToCSV({
-        nombre: nombreReporte,
-        periodo: nombreReporte,
-        resumen: {
-          ventas: resumenData.ventas_actual ?? 0,
-          gastos: resumenData.gastos_actual ?? 0,
-          utilidad: resumenData.utilidad_actual ?? 0,
-          membresias: resumenData.membresias_actual ?? 0,
-          socios: resumenData.socios_activos ?? 0,
-        },
-        graficas: {
-          ventasPorMes: graficasData.ventasPorMes ?? [],
-          gastosPorMes: graficasData.gastosPorMes ?? [],
-          membresiasPorMes: graficasData.membresiasPorMes ?? [],
-          gastosPorCategoria: graficasData.gastosPorCategoria ?? [],
-          membresiasPorPlan: graficasData.membresiasPorPlan ?? [],
-        },
-      })
+    if (periodo === "personalizado" && fechaFin < fechaInicio) {
       toast({
-        title: "Reporte descargado",
-        description: `El archivo CSV "${nombreReporte}" se descargó correctamente.`,
+        variant: "destructive",
+        title: "Rango de fechas invalido",
+        description: "La fecha final no puede ser anterior a la fecha inicial.",
       })
+      return
+    }
+
+    const nombrePeriodo = getPeriodoLabel(periodo)
+    const { inicio, fin } = getRangoPorPeriodo(periodo, fechaInicio, fechaFin)
+    const nombreReporte = `Reporte_${nombrePeriodo}_${getTodayYmdInTimeZone()}`
+
+    const tipoMapper: Record<string, string> = {
+      todos: "Completo",
+      ventas: "Ventas",
+      gastos: "Gastos",
+      utilidad: "Utilidad",
+      membresias: "Membresias",
+    }
+
+    try {
+      const response = await ReportesService.generarReporte({
+        nombre: nombreReporte,
+        descripcion: `Exportacion rapida del periodo ${nombrePeriodo}`,
+        tipoReporte: tipoMapper[tipoReporte] ?? "Completo",
+        formato: formatoExportacion,
+        fechaInicio: inicio,
+        fechaFin: fin,
+        incluirGraficos: true,
+        incluirDetalles: true,
+      })
+
+      const reporteId = response?.data?.id
+      if (!reporteId) {
+        throw new Error("No se pudo identificar el reporte generado para descargarlo.")
+      }
+
+      await ReportesService.descargarReporte(reporteId)
+
+      toast({
+        title: "Exportacion completada",
+        description: `Se descargo ${formatoExportacion} para ${nombrePeriodo}.`,
+      })
+
+      setActiveTab("historial")
+      setTimeout(() => setRefreshHistorial((prev) => prev + 1), 500)
     } catch (err: any) {
       toast({
         variant: "destructive",
         title: "Error al exportar",
-        description: err.message ?? "No se pudo generar el archivo CSV.",
+        description: err.message ?? "No se pudo generar la exportacion seleccionada.",
       })
     }
-  }, [resumenData, graficasData, periodo, toast])
+  }, [periodo, fechaInicio, fechaFin, tipoReporte, formatoExportacion, toast])
 
   const handleGenerarReporte = useCallback(async (config: ReporteConfig) => {
     const tipoMapper: Record<string, string> = {
-      completo: "Reporte Completo", ventas: "Ventas",
+      completo: "Completo", ventas: "Ventas",
       gastos: "Gastos", utilidad: "Utilidad", membresias: "Membresias",
     }
     const tipoReporteBackend = tipoMapper[config.tipo] ?? "Reporte Completo"
 
-    // 1. Descarga local inmediata — no depende del backend
-    if (resumenData && graficasData) {
-      try {
-        exportReporteFinancieroToCSV({
-          nombre: config.nombre,
-          periodo: `${config.fechaInicio} - ${config.fechaFin}`,
-          resumen: {
-            ventas: resumenData.ventas_actual ?? 0,
-            gastos: resumenData.gastos_actual ?? 0,
-            utilidad: resumenData.utilidad_actual ?? 0,
-            membresias: resumenData.membresias_actual ?? 0,
-            socios: resumenData.socios_activos ?? 0,
-          },
-          graficas: {
-            ventasPorMes: graficasData.ventasPorMes ?? [],
-            gastosPorMes: graficasData.gastosPorMes ?? [],
-            membresiasPorMes: graficasData.membresiasPorMes ?? [],
-            gastosPorCategoria: graficasData.gastosPorCategoria ?? [],
-            membresiasPorPlan: graficasData.membresiasPorPlan ?? [],
-          },
-        })
-      } catch (csvErr: any) {
-        toast({
-          variant: "destructive",
-          title: "Error al generar CSV",
-          description: csvErr.message ?? "No se pudo crear el archivo.",
-        })
-        return
-      }
+    try {
+      await ReportesService.generarReporte({
+        nombre: config.nombre,
+        descripcion: config.descripcion,
+        tipoReporte: tipoReporteBackend,
+        formato: config.formato,
+        fechaInicio: config.fechaInicio,
+        fechaFin: config.fechaFin,
+        incluirGraficos: config.incluirGraficos,
+        incluirDetalles: config.incluirDetalles,
+      })
+
+      setModalGenerar(false)
+      toast({
+        title: "Reporte generado",
+        description: `"${config.nombre}" fue generado en formato ${config.formato}.`,
+      })
+
+      setActiveTab('historial')
+      setTimeout(() => setRefreshHistorial(prev => prev + 1), 800)
+    } catch (error: any) {
+      console.error('❌ Error generando reporte:', error)
+      toast({
+        variant: "destructive",
+        title: "Error al generar",
+        description: error.message ?? "No se pudo generar el reporte.",
+      })
+      throw error
     }
+  }, [toast])
 
-    // Cerrar modal y mostrar éxito
-    setModalGenerar(false)
-    toast({
-      title: "Reporte generado",
-      description: `"${config.nombre}" descargado exitosamente como CSV.`,
-    })
+  const handleVerReporte = useCallback((reporte: ReporteHistorial) => {
+    setReportePreview(reporte)
+    setModalPreviewOpen(true)
+  }, [])
 
-    // 2. POST al backend en segundo plano para guardar en historial (no bloquea)
-    ReportesService.generarReporte({
-      nombre: config.nombre,
-      descripcion: config.descripcion,
-      tipoReporte: tipoReporteBackend,
-      formato: "Excel (.csv)",
-      fechaInicio: config.fechaInicio,
-      fechaFin: config.fechaFin,
-      incluirGraficos: config.incluirGraficos,
-      incluirDetalles: config.incluirDetalles,
-    })
-      .then(() => {
-        setActiveTab('historial')
-        setTimeout(() => setRefreshHistorial(prev => prev + 1), 800)
-      })
-      .catch((err) => {
-        console.warn('⚠️ Backend no guardó el reporte en historial:', err.message)
-      })
-  }, [resumenData, graficasData, toast])
+  const handleClosePreview = useCallback(() => {
+    setModalPreviewOpen(false)
+    setReportePreview(null)
+  }, [])
+
+  const handleSolicitarUrlPreview = useCallback(async (reporte: ReporteHistorial) => {
+    return ReportesService.obtenerUrlDescargaReporte(reporte.id)
+  }, [])
 
   const handleDescargarReporte = useCallback(async (reporte: ReporteHistorial) => {
     try {
@@ -551,8 +658,8 @@ export default function ReportesPage() {
             </div>
           ) : (
             <KpiReportes
-              ventas={resumenData?.ventas_actual ?? 0}
-              ventasAnterior={resumenData?.ventas_anterior ?? 0}
+              ventas={resumenData?.ingresos_actual ?? resumenData?.ventas_actual ?? 0}
+              ventasAnterior={resumenData?.ingresos_anterior ?? resumenData?.ventas_anterior ?? 0}
               gastos={resumenData?.gastos_actual ?? 0}
               gastosAnterior={resumenData?.gastos_anterior ?? 0}
               utilidad={resumenData?.utilidad_actual ?? 0}
@@ -593,6 +700,8 @@ export default function ReportesPage() {
                 onPeriodoChange={setPeriodo}
                 tipoReporte={tipoReporte}
                 onTipoReporteChange={setTipoReporte}
+                formatoExportacion={formatoExportacion}
+                onFormatoExportacionChange={setFormatoExportacion}
                 fechaInicio={fechaInicio}
                 onFechaInicioChange={setFechaInicio}
                 fechaFin={fechaFin}
@@ -702,26 +811,35 @@ export default function ReportesPage() {
                     <>
                       <Comparaciones
                         items={comparacionesData}
-                        labelActual="Período actual"
-                        labelAnterior="Período anterior"
+                        labelActual={comparacionesLabelActual}
+                        labelAnterior={comparacionesLabelAnterior}
+                        periodoActivo={periodo}
+                        onPeriodoActivoChange={setPeriodo}
                       />
-                      {resumenData && (
-                        <InsightsReportes
-                          ventas={resumenData.ventas_actual ?? 0}
-                          ventasAnterior={resumenData.ventas_anterior ?? 0}
-                          gastos={resumenData.gastos_actual ?? 0}
-                          gastosAnterior={resumenData.gastos_anterior ?? 0}
-                          utilidad={resumenData.utilidad_actual ?? 0}
-                          utilidadAnterior={resumenData.utilidad_anterior ?? 0}
-                          membresias={resumenData.membresias_actual ?? 0}
-                          membresiasAnterior={resumenData.membresias_anterior ?? 0}
-                          socios={resumenData.socios_activos ?? 0}
-                          topGasto={graficasData?.gastosPorCategoria?.[0]?.categoria ?? ""}
-                          topGastoMonto={graficasData?.gastosPorCategoria?.[0]?.total ?? 0}
-                          topPlan={graficasData?.membresiasPorPlan?.[0]?.plan ?? ""}
-                          topPlanSocios={graficasData?.membresiasPorPlan?.[0]?.cantidad ?? 0}
-                          periodo={getPeriodoLabel(periodo)}
-                        />
+                      {comparacionesInsights.length > 0 && (
+                        <div className="bg-card rounded-xl p-5" style={{ boxShadow: "0 4px 15px rgba(0,0,0,0.3)" }}>
+                          <h3 className="text-sm font-semibold text-foreground mb-3">Insights del periodo</h3>
+                          <div className="space-y-2">
+                            {comparacionesInsights.map((insight, index) => {
+                              const isPositivo = insight.tipo === 'positivo'
+                              const isNegativo = insight.tipo === 'negativo'
+                              return (
+                                <div
+                                  key={`${insight.tipo}-${index}`}
+                                  className={`p-3 rounded-lg text-xs ${
+                                    isPositivo
+                                      ? 'bg-success/10 text-success'
+                                      : isNegativo
+                                      ? 'bg-destructive/10 text-destructive'
+                                      : 'bg-accent/10 text-foreground'
+                                  }`}
+                                >
+                                  {insight.texto}
+                                </div>
+                              )
+                            })}
+                          </div>
+                        </div>
                       )}
                     </>
                   ) : (
@@ -750,6 +868,7 @@ export default function ReportesPage() {
                   ) : (
                     <HistorialReportes
                       reportes={reportesHistorial}
+                      onVer={handleVerReporte}
                       onDescargar={handleDescargarReporte}
                       onEliminar={handleEliminarReporte}
                       canDescargar={puedeExportar}
@@ -761,17 +880,6 @@ export default function ReportesPage() {
             </div>
           </div>
 
-          {/* Summary footer - TODO: Actualizar con datos reales del backend */}
-          {/* <div
-            className="bg-card rounded-xl p-4 flex flex-col sm:flex-row items-center justify-between gap-3"
-            style={{ boxShadow: "0 4px 15px rgba(0,0,0,0.3)" }}
-          >
-            <div className="flex items-center gap-6 text-xs flex-wrap">
-              <span className="text-muted-foreground">
-                Periodo: <span className="text-foreground font-medium">{periodo}</span>
-              </span>
-            </div>
-          </div> */}
         </div>
       </main>
 
@@ -780,6 +888,14 @@ export default function ReportesPage() {
         open={modalGenerar}
         onClose={() => setModalGenerar(false)}
         onGenerar={handleGenerarReporte}
+      />
+
+      <ReportePreviewModal
+        open={modalPreviewOpen}
+        reporte={reportePreview}
+        onClose={handleClosePreview}
+        onSolicitarUrlDescarga={handleSolicitarUrlPreview}
+        onDescargar={handleDescargarReporte}
       />
     </div>
   )
