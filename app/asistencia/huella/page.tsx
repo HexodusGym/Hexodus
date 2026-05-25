@@ -15,7 +15,8 @@ import type { HuellaMotorEvent, HuellaMotorEventsResponse } from "@/lib/types/as
 const MOTOR_URL = process.env.NEXT_PUBLIC_MOTOR_URL || "http://localhost:4000"
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "https://hexodusapi.vercel.app/api"
 const AUTO_RETRY_DELAY_MS = 800
-const EVENT_POLL_INTERVAL_MS = 750
+const EVENT_POLL_INTERVAL_MS = 1000
+const HIDDEN_TAB_EVENT_POLL_INTERVAL_MS = 10000
 const MOTOR_HEALTHCHECK_INTERVAL_MS = 3000
 const READY_FOR_NEXT_SCAN_DELAY_MS = 150
 const RESULT_NOTIFICATION_DURATION_MS = 4500
@@ -140,6 +141,18 @@ const formatearNivelConfianza = (valor: number | null | undefined) => {
 
 const tieneTexto = (valor: unknown): valor is string =>
   typeof valor === "string" && valor.trim().length > 0
+
+const debePausarPollingEventos = () =>
+  typeof document !== "undefined" && document.hidden
+
+const obtenerUrlEventosHuella = (params: { after?: number; take?: number } = {}) => {
+  const searchParams = new URLSearchParams()
+  if (typeof params.after === "number") searchParams.set("after", String(params.after))
+  if (typeof params.take === "number") searchParams.set("take", String(params.take))
+
+  const queryString = searchParams.toString()
+  return `${MOTOR_URL}/eventos${queryString ? `?${queryString}` : ""}`
+}
 
 const enriquecerSocioConConfianza = (data: SocioData | null | undefined, confidence: number) => {
   if (!data) return null
@@ -499,7 +512,7 @@ export default function AsistenciaHuellaPage() {
 
   const sincronizarCursorEventos = async () => {
     try {
-      const response = await fetch("/api/asistencia/huella/eventos?take=0", {
+      const response = await fetch(obtenerUrlEventosHuella({ take: 0 }), {
         cache: "no-store",
       })
 
@@ -511,7 +524,7 @@ export default function AsistenciaHuellaPage() {
 
       if (data.success) {
         ultimoEventoIdRef.current = data.data.latestId
-        callbackActivoRef.current = data.data.latestId > 0
+        callbackActivoRef.current = true
       }
     } catch (error) {
       console.warn("[Huella] No se pudo sincronizar el cursor inicial:", error)
@@ -730,11 +743,16 @@ export default function AsistenciaHuellaPage() {
   const consultarEventosMotor = async () => {
     if (!isMounted.current || pollingEnCursoRef.current) return
 
+    if (debePausarPollingEventos()) {
+      programarPollingEventos(HIDDEN_TAB_EVENT_POLL_INTERVAL_MS)
+      return
+    }
+
     pollingEnCursoRef.current = true
     const after = ultimoEventoIdRef.current
 
     try {
-      const response = await fetch(`/api/asistencia/huella/eventos?after=${after}`, {
+      const response = await fetch(obtenerUrlEventosHuella({ after }), {
         cache: "no-store",
       })
 
@@ -745,9 +763,9 @@ export default function AsistenciaHuellaPage() {
       const data = await response.json() as HuellaMotorEventsResponse
 
       if (data.success) {
+        callbackActivoRef.current = true
         if (typeof data.data.latestId === "number") {
           ultimoEventoIdRef.current = Math.max(ultimoEventoIdRef.current, data.data.latestId)
-          callbackActivoRef.current = callbackActivoRef.current || data.data.latestId > 0
         }
 
         const nuevosEventos = data.data.eventos.filter((evento) => evento.id > after)
