@@ -13,10 +13,10 @@ import type { HuellaMotorEvent, HuellaMotorEventsResponse } from "@/lib/types/as
 // ============================================================================
 
 const MOTOR_URL = process.env.NEXT_PUBLIC_MOTOR_URL || "http://localhost:4000"
+const MOTOR_EVENTOS_URL = `${MOTOR_URL}/eventos`
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "https://hexodusapi.vercel.app/api"
 const AUTO_RETRY_DELAY_MS = 800
-const EVENT_POLL_INTERVAL_MS = 1000
-const HIDDEN_TAB_EVENT_POLL_INTERVAL_MS = 10000
+const EVENT_POLL_INTERVAL_MS = 750
 const MOTOR_HEALTHCHECK_INTERVAL_MS = 3000
 const READY_FOR_NEXT_SCAN_DELAY_MS = 150
 const RESULT_NOTIFICATION_DURATION_MS = 4500
@@ -141,18 +141,6 @@ const formatearNivelConfianza = (valor: number | null | undefined) => {
 
 const tieneTexto = (valor: unknown): valor is string =>
   typeof valor === "string" && valor.trim().length > 0
-
-const debePausarPollingEventos = () =>
-  typeof document !== "undefined" && document.hidden
-
-const obtenerUrlEventosHuella = (params: { after?: number; take?: number } = {}) => {
-  const searchParams = new URLSearchParams()
-  if (typeof params.after === "number") searchParams.set("after", String(params.after))
-  if (typeof params.take === "number") searchParams.set("take", String(params.take))
-
-  const queryString = searchParams.toString()
-  return `${MOTOR_URL}/eventos${queryString ? `?${queryString}` : ""}`
-}
 
 const enriquecerSocioConConfianza = (data: SocioData | null | undefined, confidence: number) => {
   if (!data) return null
@@ -512,7 +500,7 @@ export default function AsistenciaHuellaPage() {
 
   const sincronizarCursorEventos = async () => {
     try {
-      const response = await fetch(obtenerUrlEventosHuella({ take: 0 }), {
+      const response = await fetch(`${MOTOR_EVENTOS_URL}?take=0`, {
         cache: "no-store",
       })
 
@@ -524,7 +512,7 @@ export default function AsistenciaHuellaPage() {
 
       if (data.success) {
         ultimoEventoIdRef.current = data.data.latestId
-        callbackActivoRef.current = true
+        callbackActivoRef.current = data.data.latestId > 0
       }
     } catch (error) {
       console.warn("[Huella] No se pudo sincronizar el cursor inicial:", error)
@@ -733,26 +721,17 @@ export default function AsistenciaHuellaPage() {
     autoRetryTimeoutRef.current = setTimeout(() => {
       if (!isMounted.current) return
       programarPollingEventos(0)
-
-      if (!callbackActivoRef.current && !verificacionEnCursoRef.current && !flujoAccesoActivoRef.current) {
-        void iniciarVerificacion(true)
-      }
     }, delay)
   }
 
   const consultarEventosMotor = async () => {
     if (!isMounted.current || pollingEnCursoRef.current) return
 
-    if (debePausarPollingEventos()) {
-      programarPollingEventos(HIDDEN_TAB_EVENT_POLL_INTERVAL_MS)
-      return
-    }
-
     pollingEnCursoRef.current = true
     const after = ultimoEventoIdRef.current
 
     try {
-      const response = await fetch(obtenerUrlEventosHuella({ after }), {
+      const response = await fetch(`${MOTOR_EVENTOS_URL}?after=${after}`, {
         cache: "no-store",
       })
 
@@ -763,9 +742,9 @@ export default function AsistenciaHuellaPage() {
       const data = await response.json() as HuellaMotorEventsResponse
 
       if (data.success) {
-        callbackActivoRef.current = true
         if (typeof data.data.latestId === "number") {
           ultimoEventoIdRef.current = Math.max(ultimoEventoIdRef.current, data.data.latestId)
+          callbackActivoRef.current = callbackActivoRef.current || data.data.latestId > 0
         }
 
         const nuevosEventos = data.data.eventos.filter((evento) => evento.id > after)
@@ -789,7 +768,7 @@ export default function AsistenciaHuellaPage() {
         }
       }
     } catch (error) {
-      console.warn("[Huella] Error leyendo eventos del callback:", error)
+      console.warn("[Huella] Error leyendo eventos locales del motor:", error)
     } finally {
       pollingEnCursoRef.current = false
       if (isMounted.current) {
@@ -1227,7 +1206,7 @@ export default function AsistenciaHuellaPage() {
             <div className="mt-6 rounded-2xl border border-border/50 bg-card/40 px-5 py-4 text-sm text-muted-foreground">
               <div className="grid gap-2 md:grid-cols-2">
                 <p>
-                  <span className="font-semibold text-foreground">Ultimo callback:</span>{" "}
+                  <span className="font-semibold text-foreground">Ultimo evento local:</span>{" "}
                   {ultimoCallbackAt
                     ? new Date(ultimoCallbackAt).toLocaleTimeString("es-MX", {
                         hour: "2-digit",
