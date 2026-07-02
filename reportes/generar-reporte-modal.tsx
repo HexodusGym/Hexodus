@@ -6,12 +6,13 @@ import {
   Info,
   Settings,
   Database,
-  Sliders,
   FileText,
   Download,
   Loader2,
 } from "lucide-react"
-import { exportReporteToCSV, type TipoReporte } from "@/lib/reportes-data"
+import { type TipoReporte } from "@/lib/reportes-data"
+
+type FormatoReporte = "CSV" | "XLSX" | "PDF"
 
 interface GenerarReporteModalProps {
   open: boolean
@@ -23,6 +24,7 @@ export interface ReporteConfig {
   nombre: string
   descripcion: string
   tipo: TipoReporte | "completo"
+  formato: FormatoReporte
   fechaInicio: string
   fechaFin: string
   incluirGraficos: boolean
@@ -33,9 +35,9 @@ export function GenerarReporteModal({ open, onClose, onGenerar }: GenerarReporte
   const [nombre, setNombre] = useState("")
   const [descripcion, setDescripcion] = useState("")
   const [tipo, setTipo] = useState<TipoReporte | "completo">("completo")
+  const [formato, setFormato] = useState<FormatoReporte>("XLSX")
   const [fechaInicio, setFechaInicio] = useState("")
   const [fechaFin, setFechaFin] = useState("")
-  const [incluirGraficos, setIncluirGraficos] = useState(true)
   const [incluirDetalles, setIncluirDetalles] = useState(true)
   const [generando, setGenerando] = useState(false)
 
@@ -52,9 +54,10 @@ export function GenerarReporteModal({ open, onClose, onGenerar }: GenerarReporte
         nombre: nombre.trim(),
         descripcion: descripcion.trim(),
         tipo,
+        formato,
         fechaInicio,
         fechaFin,
-        incluirGraficos,
+        incluirGraficos: false,
         incluirDetalles,
       })
 
@@ -62,6 +65,7 @@ export function GenerarReporteModal({ open, onClose, onGenerar }: GenerarReporte
       setNombre("")
       setDescripcion("")
       setTipo("completo")
+      setFormato("XLSX")
       setFechaInicio("")
       setFechaFin("")
       onClose()
@@ -175,12 +179,15 @@ export function GenerarReporteModal({ open, onClose, onGenerar }: GenerarReporte
                 <label className="block text-xs font-medium mb-1.5 text-muted-foreground">
                   Formato
                 </label>
-                <div className="w-full px-3 py-2.5 bg-background border border-border rounded-lg text-sm">
-                  <span className="text-accent font-medium">Excel (.csv)</span>
-                  <p className="text-[10px] text-muted-foreground mt-0.5">
-                    Formato optimizado para Excel con datos ordenados
-                  </p>
-                </div>
+                <select
+                  value={formato}
+                  onChange={(e) => setFormato(e.target.value as FormatoReporte)}
+                  className="w-full px-3 py-2.5 bg-background border border-border rounded-lg text-foreground text-sm appearance-none focus:border-accent focus:ring-0 focus:outline-none transition-colors cursor-pointer"
+                >
+                  <option value="XLSX">Excel (.xlsx) - Recomendado</option>
+                  <option value="PDF">PDF (imprimible)</option>
+                  <option value="CSV">CSV (avanzado)</option>
+                </select>
               </div>
             </div>
           </div>
@@ -224,19 +231,10 @@ export function GenerarReporteModal({ open, onClose, onGenerar }: GenerarReporte
           {/* Section 4: Advanced options */}
           <div>
             <div className="flex items-center gap-2 mb-3">
-              <Sliders className="h-4 w-4 text-accent" />
+              <FileText className="h-4 w-4 text-accent" />
               <h4 className="text-sm font-semibold text-muted-foreground">Opciones Avanzadas</h4>
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={incluirGraficos}
-                  onChange={(e) => setIncluirGraficos(e.target.checked)}
-                  className="rounded border-border bg-background text-accent focus:ring-accent focus:ring-0 h-4 w-4"
-                />
-                <span className="text-sm text-muted-foreground">Incluir graficos y visualizaciones</span>
-              </label>
+            <div className="grid grid-cols-1 gap-4">
               <label className="flex items-center gap-2 cursor-pointer">
                 <input
                   type="checkbox"
