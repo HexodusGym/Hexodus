@@ -1,4 +1,4 @@
-import { apiGet, apiPost, apiPut, apiDelete } from '@/lib/api'
+import { apiGet, apiPost, apiPut, apiDelete, apiDownload } from '@/lib/api'
 import { getMetodosPago as getMetodosPagoConfiguracion } from '@/lib/services/metodos-pago'
 import type {
   Socio,
@@ -15,10 +15,33 @@ import type {
 } from '@/lib/types/socios'
 import { mapSocioFromAPI, mapSocioListItemFromAPI } from '@/lib/types/socios'
 
+const DEFAULT_DASHBOARD_STATS: DashboardStatsSocios = {
+  total_socios: { valor: 0, etiqueta: 'Total Socios' },
+  socios_activos: { valor: 0, etiqueta: 'Activos' },
+  vencidos: { valor: 0, etiqueta: 'Vencidos' },
+  vencen_en_7_dias: { valor: 0, etiqueta: 'Vencen en 7 días' },
+}
+
 /**
  * Servicio para gestionar socios
  */
 export class SociosService {
+  /**
+   * Obtener una sola página de socios con estadísticas globales.
+   */
+  static async getPage(
+    page: number = 1,
+    limit: number = 100
+  ): Promise<{ socios: Socio[]; stats: DashboardStatsSocios; pagination: GetSociosResponse['pagination'] }> {
+    const response = await apiGet<GetSociosResponse>(`/socios?page=${page}&limit=${limit}`)
+
+    return {
+      socios: Array.isArray(response.data) ? response.data.map(mapSocioListItemFromAPI) : [],
+      stats: response.dashboard_stats ?? DEFAULT_DASHBOARD_STATS,
+      pagination: response.pagination,
+    }
+  }
+
   /**
    * Obtener todos los socios con estadísticas del dashboard
    */
@@ -28,19 +51,17 @@ export class SociosService {
     const limitePorPagina = 100
     let paginaActual = 1
     let totalPaginas = 1
-    const sociosAcumulados: GetSociosResponse['data'] = []
+    const sociosAcumulados: Socio[] = []
     let dashboardStats: DashboardStatsSocios | undefined
 
     while (paginaActual <= totalPaginas) {
-      const response = await apiGet<GetSociosResponse>(`/socios?page=${paginaActual}&limit=${limitePorPagina}`)
+      const response = await this.getPage(paginaActual, limitePorPagina)
 
       if (!dashboardStats) {
-        dashboardStats = response.dashboard_stats
+        dashboardStats = response.stats
       }
 
-      if (Array.isArray(response.data)) {
-        sociosAcumulados.push(...response.data)
-      }
+      sociosAcumulados.push(...response.socios)
 
       const totalPaginasBackend = response.pagination?.total_pages
       totalPaginas = typeof totalPaginasBackend === 'number' && totalPaginasBackend > 0
@@ -71,13 +92,48 @@ export class SociosService {
       }
     }
 
-    const socios = sociosAcumulados.map(mapSocioListItemFromAPI)
-    console.log(`✅ ${socios.length} socios mapeados correctamente`)
+    console.log(`✅ ${sociosAcumulados.length} socios mapeados correctamente`)
 
     return {
-      socios,
+      socios: sociosAcumulados,
       stats
     }
+  }
+
+  static async exportarSocios(filtros: {
+    busqueda?: string
+    vigencia?: string
+    membresia?: string
+    genero?: string
+    contratoFirma?: string
+    contratoVigencia?: string
+    fechaDesde?: string
+    fechaHasta?: string
+  } = {}): Promise<void> {
+    const params = new URLSearchParams()
+
+    if (filtros.busqueda?.trim()) params.set('search', filtros.busqueda.trim())
+    if (filtros.vigencia && filtros.vigencia !== 'todos') params.set('vigencia', filtros.vigencia)
+    if (filtros.membresia && filtros.membresia !== 'todos') params.set('membresia', filtros.membresia)
+    if (filtros.genero && filtros.genero !== 'todos') params.set('genero', filtros.genero)
+    if (filtros.contratoFirma && filtros.contratoFirma !== 'todos') params.set('contrato_firma', filtros.contratoFirma)
+    if (filtros.contratoVigencia && filtros.contratoVigencia !== 'todos') params.set('contrato_vigencia', filtros.contratoVigencia)
+    if (filtros.fechaDesde) params.set('fecha_desde', filtros.fechaDesde)
+    if (filtros.fechaHasta) params.set('fecha_hasta', filtros.fechaHasta)
+
+    const query = params.toString()
+    const { blob, filename } = await apiDownload(`/socios/exportar${query ? `?${query}` : ''}`, {
+      timeout: 30000,
+    })
+
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = filename
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    URL.revokeObjectURL(url)
   }
 
   /**
@@ -199,14 +255,21 @@ export class SociosService {
   /**
    * Registrar pago de membresía pendiente en caja
    * POST /api/socios/:id/pagar-membresia
+   * Soporta pagos simples (metodo_pago_id) o split (pagos[])
    */
-  static async pagarMembresiaPendiente(id: number, metodoPagoId: number): Promise<string> {
+  static async pagarMembresiaPendiente(
+    id: number, 
+    metodoPagoIdOPagos: number | Array<{ metodo_pago_id: number; monto: number }>
+  ): Promise<string> {
     console.log(`💰 POST /api/socios/${id}/pagar-membresia - Registrando pago de adeudo`)
-    console.log('📤 metodo_pago_id:', metodoPagoId)
+    
+    const body = Array.isArray(metodoPagoIdOPagos)
+      ? { pagos: metodoPagoIdOPagos }
+      : { metodo_pago_id: metodoPagoIdOPagos }
+    
+    console.log('📤 Payload:', body)
 
-    const response = await apiPost<{ message?: string }>(`/socios/${id}/pagar-membresia`, {
-      metodo_pago_id: metodoPagoId,
-    })
+    const response = await apiPost<{ message?: string }>(`/socios/${id}/pagar-membresia`, body)
 
     const mensaje = response?.message || 'Pago registrado correctamente en caja.'
     console.log('✅ Pago de adeudo registrado:', mensaje)
@@ -216,16 +279,23 @@ export class SociosService {
   /**
    * Renovar membresía vencida
    * POST /api/socios/:id/renovar
+   * Soporta renovación simple (metodo_pago_id) o split (pagos[])
    */
-  static async renovarMembresia(id: number, planId: number, metodoPagoId: number): Promise<string> {
+  static async renovarMembresia(
+    id: number, 
+    planId: number, 
+    metodoPagoIdOPagos: number | Array<{ metodo_pago_id: number; monto: number }>
+  ): Promise<string> {
     console.log(`🔄 POST /api/socios/${id}/renovar - Renovando membresía`)
     console.log('📤 plan_id:', planId)
-    console.log('📤 metodo_pago_id:', metodoPagoId)
+    
+    const body = Array.isArray(metodoPagoIdOPagos)
+      ? { plan_id: planId, pagos: metodoPagoIdOPagos }
+      : { plan_id: planId, metodo_pago_id: metodoPagoIdOPagos }
+    
+    console.log('📤 Payload:', body)
 
-    const response = await apiPost<{ message?: string }>(`/socios/${id}/renovar`, {
-      plan_id: planId,
-      metodo_pago_id: metodoPagoId,
-    })
+    const response = await apiPost<{ message?: string }>(`/socios/${id}/renovar`, body)
 
     const mensaje = response?.message || 'Membresía renovada correctamente.'
     console.log('✅ Renovación completada:', mensaje)
