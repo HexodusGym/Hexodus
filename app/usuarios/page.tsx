@@ -132,11 +132,15 @@ export default function UsuariosPage() {
     }
   }, [paginaActual, limite, busquedaAplicada, rolFiltro, activoFiltro, toast])
 
-  // Cargar roles y usuarios al montar y cuando cambien los filtros
+  // Cargar roles al montar. Los filtros solo deben recargar usuarios.
   useEffect(() => {
     cargarRoles()
+  }, [cargarRoles])
+
+  // Cargar usuarios al montar y cuando cambien los filtros
+  useEffect(() => {
     cargarUsuarios()
-  }, [cargarRoles, cargarUsuarios])
+  }, [cargarUsuarios])
 
   // Aplicar búsqueda (con debounce manual)
   const aplicarBusqueda = useCallback(() => {
@@ -372,6 +376,8 @@ export default function UsuariosPage() {
               setRolFiltro(rol)
               setPaginaActual(1)
             }}
+            roles={roles}
+            rolesLoading={rolesLoading}
             activoFiltro={activoFiltro}
             onActivoChange={(estado) => {
               setActivoFiltro(estado)
@@ -407,7 +413,7 @@ export default function UsuariosPage() {
 
           {/* Paginación */}
           {totalPaginas > 1 && (
-            <div className="flex items-center justify-between border-t border-border pt-4">
+            <div className="mobile-safe-pagination flex items-center justify-between border-t border-border pt-4">
               <p className="text-sm text-muted-foreground">
                 Página {paginaActual} de {totalPaginas} • Total: {totalUsuarios} usuarios
               </p>
