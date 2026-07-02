@@ -3,12 +3,14 @@
 import { Users, UserCheck, AlertCircle, CalendarClock, TrendingUp } from "lucide-react"
 import type { Socio } from "@/lib/socios-data"
 import { getVigenciaMembresia } from "@/lib/socios-data"
+import type { DashboardStatsSocios } from "@/lib/types/socios"
 
 interface KpiSociosProps {
   socios: Socio[]
+  stats?: DashboardStatsSocios | null
 }
 
-export function KpiSocios({ socios }: KpiSociosProps) {
+export function KpiSocios({ socios, stats }: KpiSociosProps) {
   // Helper para obtener fecha de vencimiento de forma uniforme (API vs Mock)
   const getFechaFin = (s: any): string => {
     if ('fechaVencimientoMembresia' in s) {
@@ -17,19 +19,19 @@ export function KpiSocios({ socios }: KpiSociosProps) {
     return s.fechaFin || ''
   }
 
-  const total = socios.length
-  const activos = socios.filter((s) => {
+  const total = stats?.total_socios.valor ?? socios.length
+  const activos = stats?.socios_activos.valor ?? socios.filter((s) => {
     const vig = getVigenciaMembresia(getFechaFin(s))
     return vig === "vigente" || vig === "por_vencer"
   }).length
-  const vencidos = socios.filter((s) => getVigenciaMembresia(getFechaFin(s)) === "vencida").length
-  const porVencer = socios.filter((s) => getVigenciaMembresia(getFechaFin(s)) === "por_vencer").length
+  const vencidos = stats?.vencidos.valor ?? socios.filter((s) => getVigenciaMembresia(getFechaFin(s)) === "vencida").length
+  const porVencer = stats?.vencen_en_7_dias.valor ?? socios.filter((s) => getVigenciaMembresia(getFechaFin(s)) === "por_vencer").length
 
   const kpis = [
     {
       label: "Total Socios",
       value: total,
-      sub: "+12 este mes",
+      sub: stats?.total_socios.etiqueta ?? "+12 este mes",
       subColor: "text-[#22C55E]",
       icon: Users,
       accentType: "accent" as const,
@@ -37,7 +39,7 @@ export function KpiSocios({ socios }: KpiSociosProps) {
     {
       label: "Socios Activos",
       value: activos,
-      sub: `${total > 0 ? ((activos / total) * 100).toFixed(0) : 0}% del total`,
+      sub: stats?.socios_activos.etiqueta ?? `${total > 0 ? ((activos / total) * 100).toFixed(0) : 0}% del total`,
       subColor: "text-muted-foreground",
       icon: UserCheck,
       accentType: "success" as const,
@@ -45,7 +47,7 @@ export function KpiSocios({ socios }: KpiSociosProps) {
     {
       label: "Vencidos",
       value: vencidos,
-      sub: "Requieren seguimiento",
+      sub: stats?.vencidos.etiqueta ?? "Requieren seguimiento",
       subColor: "text-primary",
       icon: AlertCircle,
       accentType: "primary" as const,
@@ -53,7 +55,7 @@ export function KpiSocios({ socios }: KpiSociosProps) {
     {
       label: "Vencen en 7 dias",
       value: porVencer,
-      sub: "Renovacion pendiente",
+      sub: stats?.vencen_en_7_dias.etiqueta ?? "Renovacion pendiente",
       subColor: "text-warning",
       icon: CalendarClock,
       accentType: "accent" as const,
@@ -67,13 +69,13 @@ export function KpiSocios({ socios }: KpiSociosProps) {
   }
 
   return (
-    <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+    <section className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4 xl:gap-4">
       {kpis.map((kpi) => {
         const colors = accentColors[kpi.accentType]
         return (
           <div
             key={kpi.label}
-            className="group bg-card rounded-xl p-5 relative overflow-hidden transition-all duration-300 hover:scale-[1.02]"
+            className="group bg-card rounded-xl p-4 xl:p-5 relative min-w-0 overflow-hidden transition-all duration-300 hover:scale-[1.02]"
             style={{ boxShadow: "0 4px 15px rgba(0,0,0,0.3)" }}
           >
             <div
@@ -83,19 +85,19 @@ export function KpiSocios({ socios }: KpiSociosProps) {
                 boxShadow: `0 0 8px ${colors.shadow}`,
               }}
             />
-            <div className="flex items-center justify-between mb-3">
-              <span className={`text-xs font-medium uppercase tracking-wider ${colors.text}`}>
+            <div className="flex items-center justify-between gap-3 mb-3">
+              <span className={`min-w-0 truncate text-xs font-medium uppercase tracking-wider ${colors.text}`}>
                 {kpi.label}
               </span>
               <kpi.icon
-                className={`h-5 w-5 ${colors.text}`}
+                className={`h-5 w-5 shrink-0 ${colors.text}`}
                 style={{ filter: `drop-shadow(0 0 4px ${colors.shadow})` }}
               />
             </div>
-            <p className="text-3xl font-bold text-foreground mb-1">{kpi.value}</p>
-            <span className={`text-xs flex items-center gap-1 ${kpi.subColor}`}>
+            <p className="truncate text-3xl font-bold text-foreground mb-1">{kpi.value}</p>
+            <span className={`flex min-w-0 items-center gap-1 text-xs ${kpi.subColor}`}>
               {kpi.label === "Total Socios" && <TrendingUp className="h-3 w-3" />}
-              {kpi.sub}
+              <span className="min-w-0 truncate">{kpi.sub}</span>
             </span>
           </div>
         )
