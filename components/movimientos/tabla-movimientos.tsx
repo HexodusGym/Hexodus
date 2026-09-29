@@ -5,7 +5,6 @@ import { useAuthContext } from "@/lib/contexts/auth-context"
 import {
   Plus,
   Eye,
-  Pencil,
   Trash2,
   ChevronLeft,
   ChevronRight,
@@ -16,6 +15,7 @@ import {
   Clock,
   Calendar,
   Activity,
+  Lock,
 } from "lucide-react"
 import type { Movimiento } from "@/lib/types/movimientos"
 
@@ -87,7 +87,6 @@ export function TablaMovimientos({
   movimientos,
   onNuevo,
   onVer,
-  onEditar,
   onEliminar,
   serverPagination,
   onPageChange,
@@ -405,22 +404,24 @@ export function TablaMovimientos({
                         >
                           <Eye className="h-4 w-4" />
                         </button>
-                        {tienePermiso('movimientos', 'editar') && (
-                          <button
-                            onClick={() => onEditar(m)}
-                            className="p-1.5 rounded-lg hover:bg-warning/15 text-warning transition-colors"
-                            title="Editar"
-                          >
-                            <Pencil className="h-4 w-4" />
-                          </button>
-                        )}
-                        {tienePermiso('movimientos', 'eliminar') && (
+                        {/* Solo mostrar botón eliminar para movimientos MANUALES */}
+                        {m.origen === 'manual' && tienePermiso('movimientos', 'eliminar') && (
                           <button
                             onClick={() => setConfirmDelete(m.id)}
                             className="p-1.5 rounded-lg hover:bg-destructive/15 text-destructive transition-colors"
                             title="Eliminar"
                           >
                             <Trash2 className="h-4 w-4" />
+                          </button>
+                        )}
+                        {/* Mostrar candado para movimientos automáticos si tiene permiso */}
+                        {m.origen !== 'manual' && tienePermiso('movimientos', 'eliminar') && (
+                          <button
+                            disabled
+                            className="p-1.5 rounded-lg bg-muted/30 text-muted-foreground/50 cursor-not-allowed"
+                            title="Este es un movimiento automático generado por otro módulo (ej: ventas)"
+                          >
+                            <Lock className="h-4 w-4" />
                           </button>
                         )}
                       </div>

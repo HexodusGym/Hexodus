@@ -29,6 +29,8 @@ import { formatCurrency } from "@/lib/types/ventas"
 import { CajaService } from "@/lib/services/caja"
 import type { CorteCaja as CorteCajaType, GetCortesResponse, Movimiento, CorteDetalle } from "@/lib/types/caja"
 import { useToast } from "@/hooks/use-toast"
+import { DesgloceMetodosKpi } from "@/components/ventas/desglose-metodos-kpi"
+import * as XLSX from "xlsx"
 
 // Helper functions para corte de caja (temporal hasta integración con API)
 function getMetodoPagoLabel(metodo: MetodoPago | string): string {
@@ -49,6 +51,38 @@ function getVentasPorMetodo(ventas: Venta[]): { metodo: string; cantidad: number
     .sort((a, b) => b.cantidad - a.cantidad)
 }
 
+function parseFecha(fecha?: string | null): Date | null {
+  if (!fecha) return null
+  if (fecha.toLowerCase().includes("caja abierta")) return null
+
+  const date = new Date(fecha)
+  return Number.isNaN(date.getTime()) ? null : date
+}
+
+function formatFecha(fecha?: string | null, fallback = "Sin fecha"): string {
+  const date = parseFecha(fecha)
+  if (!date) return fallback
+  return date.toLocaleDateString("es-MX")
+}
+
+function formatFechaHora(fecha?: string | null, fallback = "Sin fecha"): string {
+  const date = parseFecha(fecha)
+  if (!date) return fallback
+  return date.toLocaleString("es-MX")
+}
+
+function formatFechaHoraCorta(fecha?: string | null, fallback = "Sin fecha"): string {
+  const date = parseFecha(fecha)
+  if (!date) return fallback
+  return date.toLocaleString("es-MX", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  })
+}
+
 // ====== Types ======
 
 // Usamos los tipos del API directamente
@@ -60,6 +94,82 @@ interface CorteCajaProps {
   fondoInicial: number
   canCrearCorte?: boolean
   canExportar?: boolean
+}
+
+interface MovimientoConsultaRow {
+  id: number
+  fecha: string
+  hora: string
+  concepto: string
+  tipo: string
+  tipoPago: string
+  usuario: string
+  metodo: string
+  ingreso: number
+  egreso: number
+}
+
+interface MetodoResumen {
+  metodo: string
+  ingresos: number
+  egresos: number
+  neto: number
+}
+
+function normalizarMetodoPago(metodo?: string | null): string {
+  const valor = (metodo || "").trim().toLowerCase()
+  if (valor === "") return "N/A"
+  if (valor === "efectivo") return "Efectivo"
+  if (valor === "tarjeta") return "Tarjeta"
+  if (valor === "transferencia") return "Transferencia"
+  if (valor === "otro") return "Otro"
+  return metodo || "N/A"
+}
+
+function esMovimientoApertura(concepto?: string | null): boolean {
+  const valor = (concepto || "").trim().toLowerCase()
+  return (
+    valor.includes("apertura") ||
+    valor.includes("fondo de caja")
+  )
+}
+
+function agruparMovimientosPorMetodo(
+  movimientos: Array<{ metodo?: string | null; tipo?: string; ingreso?: number; egreso?: number; monto?: number; concepto?: string | null }>
+): MetodoResumen[] {
+  const metodosMap = new Map<string, { ingresos: number; egresos: number }>()
+
+  movimientos.forEach((mov) => {
+    // La apertura/fondo inicial no debe formar parte del desglose por método.
+    if (esMovimientoApertura(mov.concepto)) {
+      return
+    }
+
+    const metodo = normalizarMetodoPago(mov.metodo)
+    const tipo = String(mov.tipo ?? "").toLowerCase()
+    let ingreso = Number(mov.ingreso ?? 0)
+    let egreso = Number(mov.egreso ?? 0)
+
+    if (ingreso === 0 && egreso === 0 && mov.monto != null) {
+      const monto = Number(mov.monto)
+      if (tipo === "ingreso") ingreso = monto
+      if (tipo === "egreso" || tipo === "gasto") egreso = monto
+    }
+
+    const actual = metodosMap.get(metodo) ?? { ingresos: 0, egresos: 0 }
+    actual.ingresos += ingreso
+    actual.egresos += egreso
+    metodosMap.set(metodo, actual)
+  })
+
+  return Array.from(metodosMap.entries())
+    .map(([metodo, valores]) => ({
+      metodo,
+      ingresos: valores.ingresos,
+      egresos: valores.egresos,
+      neto: valores.ingresos - valores.egresos,
+    }))
+    .sort((a, b) => b.neto - a.neto)
 }
 
 // ====== Main Component ======
@@ -134,7 +244,6 @@ export function CorteCaja({
     }
   }, [filtroFechaInicio, filtroFechaFin, pagination.current_page, toast])
 
-  // Cargar cortes al montar el componente
   useEffect(() => {
     cargarCortes()
   }, [])
@@ -212,24 +321,31 @@ export function CorteCaja({
     const rows = cortes.map((c) => [
       c.folio,
       c.fechaInicio,
-      c.fechaFin,
-      c.ingresos.toFixed(2),
-      c.egresos.toFixed(2),
-      c.cajaInicial.toFixed(2),
-      c.cajaFinal.toFixed(2),
+      c.fechaFin ?? "Caja abierta",
+      c.ingresos,
+      c.egresos,
+      c.cajaInicial,
+      c.cajaFinal,
       c.usuario,
       c.fechaCreacion,
       c.observacion,
       c.status,
     ])
-    const csv = [headers.join(","), ...rows.map((r) => r.join(","))].join("\n")
-    const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8;" })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement("a")
-    a.href = url
-    a.download = `cortes_caja_${new Date().toISOString().split("T")[0]}.csv`
-    a.click()
-    URL.revokeObjectURL(url)
+    const worksheet = XLSX.utils.aoa_to_sheet([headers, ...rows])
+    worksheet["!cols"] = [
+      { wch: 14 }, { wch: 22 }, { wch: 22 }, { wch: 14 }, { wch: 14 },
+      { wch: 14 }, { wch: 14 }, { wch: 26 }, { wch: 22 }, { wch: 38 }, { wch: 14 },
+    ]
+    if (rows.length > 0) worksheet["!autofilter"] = { ref: `A1:K${rows.length + 1}` }
+    for (let row = 2; row <= rows.length + 1; row += 1) {
+      for (const column of ["D", "E", "F", "G"]) {
+        if (worksheet[`${column}${row}`]) worksheet[`${column}${row}`].z = '"$"#,##0.00'
+      }
+    }
+
+    const workbook = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Cortes de caja")
+    XLSX.writeFile(workbook, `cortes_caja_${new Date().toISOString().split("T")[0]}.xlsx`)
     
     toast({
       title: "Exportación exitosa",
@@ -252,10 +368,10 @@ export function CorteCaja({
   }, [cargarCortes])
 
   return (
-    <div className="space-y-4">
+    <div className="min-w-0 space-y-4">
       {/* Action Bar */}
       <div
-        className="bg-card rounded-xl p-5"
+        className="min-w-0 bg-card rounded-xl p-4 sm:p-5"
         style={{ boxShadow: "0 4px 15px rgba(0,0,0,0.3)" }}
       >
         <div className="flex items-center gap-2 mb-5">
@@ -266,11 +382,11 @@ export function CorteCaja({
         </div>
 
         {/* Top Action Buttons */}
-        <div className="flex flex-wrap items-center gap-3 mb-5">
+        <div className="grid grid-cols-1 gap-2 mb-5 sm:flex sm:flex-wrap sm:items-center sm:gap-3">
           {canCrearCorte && (
             <button
               onClick={() => setShowNuevoModal(true)}
-              className="flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold uppercase bg-primary text-primary-foreground glow-primary glow-primary-hover transition-all"
+              className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-xs font-bold uppercase bg-primary text-primary-foreground glow-primary glow-primary-hover transition-all"
             >
               <PlusCircle className="h-4 w-4" />
               Nuevo
@@ -281,7 +397,7 @@ export function CorteCaja({
               if (selectedCorte) cargarDetalle(selectedCorte.id)
             }}
             disabled={!selectedCorte || loadingDetalle}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold uppercase border border-accent text-accent hover:bg-accent/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-xs font-bold uppercase border border-accent text-accent hover:bg-accent/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {loadingDetalle ? (
               <Loader2 className="h-4 w-4 animate-spin" />
@@ -290,12 +406,12 @@ export function CorteCaja({
             )}
             Ver Detalle
           </button>
-          <div className="flex-1" />
+          <div className="hidden flex-1 sm:block" />
           {canCrearCorte && (
             <button
               onClick={handleEliminar}
               disabled={!selectedCorte}
-              className="flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold uppercase border border-destructive text-destructive hover:bg-destructive/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-xs font-bold uppercase border border-destructive text-destructive hover:bg-destructive/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
             >
               <Trash2 className="h-4 w-4" />
               Eliminar
@@ -304,7 +420,7 @@ export function CorteCaja({
           {canExportar && (
             <button
               onClick={handleExportar}
-              className="flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold uppercase border border-success text-success hover:bg-success/10 transition-colors"
+              className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-xs font-bold uppercase border border-success text-success hover:bg-success/10 transition-colors"
             >
               <FileSpreadsheet className="h-4 w-4" />
               Exportar a Excel
@@ -313,9 +429,9 @@ export function CorteCaja({
         </div>
 
         {/* Date Filters + Efectivo en Caja */}
-        <div className="flex flex-wrap items-end gap-4 mb-5 pb-5 border-b border-border">
-          <div className="flex items-end gap-3">
-            <div>
+        <div className="grid grid-cols-1 gap-4 mb-5 pb-5 border-b border-border lg:flex lg:flex-wrap lg:items-end">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 sm:items-end">
+            <div className="min-w-0">
               <label className="block text-[10px] font-medium text-muted-foreground mb-1 uppercase tracking-wider">
                 Fecha inicio
               </label>
@@ -323,10 +439,10 @@ export function CorteCaja({
                 type="date"
                 value={filtroFechaInicio}
                 onChange={(e) => setFiltroFechaInicio(e.target.value)}
-                className="px-3 py-2 bg-background border border-border rounded-lg text-foreground text-xs focus:border-accent focus:ring-0 focus:outline-none transition-colors"
+                className="w-full px-3 py-2.5 bg-background border border-border rounded-lg text-foreground text-xs focus:border-accent focus:ring-0 focus:outline-none transition-colors"
               />
             </div>
-            <div>
+            <div className="min-w-0">
               <label className="block text-[10px] font-medium text-muted-foreground mb-1 uppercase tracking-wider">
                 Fecha fin
               </label>
@@ -334,22 +450,22 @@ export function CorteCaja({
                 type="date"
                 value={filtroFechaFin}
                 onChange={(e) => setFiltroFechaFin(e.target.value)}
-                className="px-3 py-2 bg-background border border-border rounded-lg text-foreground text-xs focus:border-accent focus:ring-0 focus:outline-none transition-colors"
+                className="w-full px-3 py-2.5 bg-background border border-border rounded-lg text-foreground text-xs focus:border-accent focus:ring-0 focus:outline-none transition-colors"
               />
             </div>
             <button
               onClick={handleBuscar}
-              className="flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold uppercase bg-accent text-accent-foreground glow-accent glow-accent-hover transition-all"
+              className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-xs font-bold uppercase bg-accent text-accent-foreground glow-accent glow-accent-hover transition-all"
             >
               <Search className="h-3.5 w-3.5" />
               Buscar
             </button>
           </div>
 
-          <div className="flex-1" />
+          <div className="hidden flex-1 lg:block" />
 
           {/* Efectivo en Caja */}
-          <div className="flex items-center gap-3 bg-background rounded-lg px-4 py-2.5">
+          <div className="flex items-center gap-3 bg-background rounded-lg px-4 py-3">
             <DollarSign className="h-5 w-5 text-success" />
             <div>
               <span className="text-[10px] text-muted-foreground uppercase tracking-wider block">
@@ -360,8 +476,101 @@ export function CorteCaja({
           </div>
         </div>
 
+        {/* Cortes mobile cards */}
+        <div className="space-y-3 md:hidden">
+          {loading ? (
+            <div className="flex items-center justify-center py-16">
+              <Loader2 className="h-8 w-8 text-accent animate-spin" />
+            </div>
+          ) : cortes.length === 0 ? (
+            <div className="rounded-xl border border-border bg-background/40 px-4 py-10 text-center text-sm text-muted-foreground">
+              No hay cortes registrados
+            </div>
+          ) : (
+            cortes.map((corte) => {
+              const isSelected = selectedCorte?.id === corte.id
+              const fechaInicio = formatFecha(corte.fechaInicio)
+              const fechaFin = formatFecha(corte.fechaFin, "Caja abierta")
+
+              return (
+                <article
+                  key={corte.id}
+                  onClick={() => setSelectedCorte(isSelected ? null : corte)}
+                  className={`rounded-xl border p-4 transition-colors ${
+                    isSelected
+                      ? "border-accent/60 bg-accent/10"
+                      : "border-border bg-background/35"
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="font-mono text-sm font-semibold text-accent">{corte.folio}</p>
+                      <h4 className="mt-1 truncate text-base font-semibold text-foreground">
+                        {corte.usuario}
+                      </h4>
+                    </div>
+                    <div
+                      className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border ${
+                        isSelected ? "border-accent bg-accent text-accent-foreground" : "border-border text-muted-foreground"
+                      }`}
+                    >
+                      {isSelected && <CheckCircle2 className="h-4 w-4" />}
+                    </div>
+                  </div>
+
+                  <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
+                    <div>
+                      <p className="text-xs uppercase tracking-wider text-muted-foreground">Inicio</p>
+                      <p className="mt-1 font-medium text-foreground">{fechaInicio}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs uppercase tracking-wider text-muted-foreground">Fin</p>
+                      <p className="mt-1 font-medium text-foreground">{fechaFin}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs uppercase tracking-wider text-muted-foreground">Ingresos</p>
+                      <p className="mt-1 font-semibold text-success">{formatCurrency(corte.ingresos)}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs uppercase tracking-wider text-muted-foreground">Egresos</p>
+                      <p className="mt-1 font-semibold text-destructive">{formatCurrency(corte.egresos)}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs uppercase tracking-wider text-muted-foreground">Caja inicial</p>
+                      <p className="mt-1 font-semibold text-accent">{formatCurrency(corte.cajaInicial)}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs uppercase tracking-wider text-muted-foreground">Caja final</p>
+                      <p className="mt-1 font-semibold text-accent">{formatCurrency(corte.cajaFinal)}</p>
+                    </div>
+                  </div>
+
+                  {corte.observacion && (
+                    <p className="mt-3 line-clamp-2 rounded-lg bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+                      {corte.observacion}
+                    </p>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      setSelectedCorte(corte)
+                      cargarDetalle(corte.id)
+                    }}
+                    className="mt-4 flex w-full items-center justify-center gap-2 rounded-lg border border-accent/30 bg-accent/10 px-3 py-2.5 text-sm font-semibold text-accent"
+                  >
+                    <Eye className="h-4 w-4" />
+                    Ver detalle
+                  </button>
+                </article>
+              )
+            })
+          )}
+        </div>
+
         {/* Cortes Table */}
-        <div className="overflow-x-auto">
+        <div className="hidden overflow-x-auto md:block">
           {loading ? (
             <div className="flex items-center justify-center py-16">
               <Loader2 className="h-8 w-8 text-accent animate-spin" />
@@ -416,10 +625,9 @@ export function CorteCaja({
                 ) : (
                   cortes.map((corte) => {
                     const isSelected = selectedCorte?.id === corte.id
-                    // Formatear fechas
-                    const fechaInicio = new Date(corte.fechaInicio).toLocaleDateString("es-MX")
-                    const fechaFin = new Date(corte.fechaFin).toLocaleDateString("es-MX")
-                    const fechaCreacion = new Date(corte.fechaCreacion).toLocaleString("es-MX")
+                    const fechaInicio = formatFecha(corte.fechaInicio)
+                    const fechaFin = formatFecha(corte.fechaFin, "Caja abierta")
+                    const fechaCreacion = formatFechaHora(corte.fechaCreacion)
                     
                     return (
                       <tr
@@ -479,7 +687,7 @@ export function CorteCaja({
 
         {/* Pagination */}
         {pagination.total_pages > 1 && !loading && (
-          <div className="flex items-center justify-between mt-4 pt-4 border-t border-border">
+          <div className="mobile-safe-pagination flex items-center justify-between mt-4 pt-4 border-t border-border">
             <span className="text-xs text-muted-foreground">
               {pagination.total_records} corte{pagination.total_records !== 1 ? "s" : ""} registrado{pagination.total_records !== 1 ? "s" : ""}
             </span>
@@ -506,105 +714,7 @@ export function CorteCaja({
         )}
       </div>
 
-      {/* Summary Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        {/* Efectivo en Caja */}
-        <div
-          className="bg-card rounded-xl p-4 relative overflow-hidden"
-          style={{ boxShadow: "0 4px 15px rgba(0,0,0,0.3)" }}
-        >
-          <div className="absolute top-0 left-0 right-0 h-[3px]" style={{ background: "#4BB543" }} />
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-[10px] text-muted-foreground uppercase tracking-wider">Efectivo en Caja</span>
-            <DollarSign className="h-4 w-4 text-success" />
-          </div>
-          {loading ? (
-            <div className="flex items-center py-2">
-              <Loader2 className="h-6 w-6 text-success animate-spin" />
-            </div>
-          ) : (
-            <>
-              <p className="text-xl font-bold text-success">
-                {formatCurrency(dashboardStats?.efectivo_caja.total ?? efectivoEnCaja)}
-              </p>
-              <div className="flex items-center gap-3 mt-2 text-[10px] text-muted-foreground">
-                <span className="flex items-center gap-1">
-                  <ArrowDownRight className="h-3 w-3" />
-                  Fondo: {formatCurrency(dashboardStats?.efectivo_caja.fondo ?? fondoInicial)}
-                </span>
-                <span className="flex items-center gap-1">
-                  <ArrowUpRight className="h-3 w-3 text-success" />
-                  {dashboardStats && dashboardStats.efectivo_caja.variacion >= 0 ? "+" : ""}
-                  {formatCurrency(dashboardStats?.efectivo_caja.variacion ?? totalEfectivo)}
-                </span>
-              </div>
-            </>
-          )}
-        </div>
 
-        {/* Total Hoy */}
-        <div
-          className="bg-card rounded-xl p-4 relative overflow-hidden"
-          style={{ boxShadow: "0 4px 15px rgba(0,0,0,0.3)" }}
-        >
-          <div className="absolute top-0 left-0 right-0 h-[3px] bg-primary" />
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-[10px] text-muted-foreground uppercase tracking-wider">Total Hoy</span>
-            <Receipt className="h-4 w-4 text-primary" />
-          </div>
-          {loading ? (
-            <div className="flex items-center py-2">
-              <Loader2 className="h-6 w-6 text-primary animate-spin" />
-            </div>
-          ) : (
-            <>
-              <p className="text-xl font-bold text-primary">
-                {formatCurrency(
-                  dashboardStats?.total_hoy.total ?? ventasHoy.reduce((s, v) => s + v.total, 0)
-                )}
-              </p>
-              <p className="text-[10px] text-muted-foreground mt-2">
-                {dashboardStats?.total_hoy.transacciones ?? ventasHoy.length} transacciones
-              </p>
-            </>
-          )}
-        </div>
-
-        {/* Cortes Realizados */}
-        <div
-          className="bg-card rounded-xl p-4 relative overflow-hidden"
-          style={{ boxShadow: "0 4px 15px rgba(0,0,0,0.3)" }}
-        >
-          <div className="absolute top-0 left-0 right-0 h-[3px] bg-accent" />
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-[10px] text-muted-foreground uppercase tracking-wider">Cortes Realizados</span>
-            <Calendar className="h-4 w-4 text-accent" />
-          </div>
-          {loading ? (
-            <div className="flex items-center py-2">
-              <Loader2 className="h-6 w-6 text-accent animate-spin" />
-            </div>
-          ) : (
-            <>
-              <p className="text-xl font-bold text-accent">
-                {dashboardStats?.cortes_realizados.total ?? cortes.length}
-              </p>
-              <p className="text-[10px] text-muted-foreground mt-2">
-                Ultimo:{" "}
-                {dashboardStats?.cortes_realizados.ultimo
-                  ? new Date(dashboardStats.cortes_realizados.ultimo).toLocaleString("es-MX", {
-                      year: "numeric",
-                      month: "2-digit",
-                      day: "2-digit",
-                      hour: "2-digit",
-                      minute: "2-digit",
-                    })
-                  : cortes[0]?.fechaCreacion || "N/A"}
-              </p>
-            </>
-          )}
-        </div>
-      </div>
 
       {/* Nuevo Corte Modal */}
       {showNuevoModal && (
@@ -649,11 +759,16 @@ function NuevoCorteModal({
   const [observacion, setObservacion] = useState("")
   const [consulted, setConsulted] = useState(false)
   const [loading, setLoading] = useState(false)
-  const [movimientos, setMovimientos] = useState<Movimiento[]>([])
+  const [movimientos, setMovimientos] = useState<MovimientoConsultaRow[]>([])
   const [ingresos, setIngresos] = useState(0)
   const [egresos, setEgresos] = useState(0)
   const [efectivoInicial, setEfectivoInicial] = useState(0)
   const [efectivoFinal, setEfectivoFinal] = useState(0)
+
+  const metodosNuevoCorte = useMemo(() => {
+    if (!consulted || movimientos.length === 0) return []
+    return agruparMovimientosPorMetodo(movimientos)
+  }, [consulted, movimientos])
 
   const handleConsultar = useCallback(async () => {
     setLoading(true)
@@ -670,16 +785,20 @@ function NuevoCorteModal({
       // Adaptar MovimientoCaja a estructura UI
       const movs = response.movimientos.map((m: any) => {
         const fecha = new Date(m.fecha)
+        const tipoNormalizado = String(m.tipo ?? "").toLowerCase()
+        const monto = Number(m.monto ?? 0)
+        const esIngreso = tipoNormalizado === "ingreso"
         return {
           id: m.id,
           fecha: fecha.toLocaleDateString("es-MX"),
           hora: fecha.toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit" }),
           concepto: m.concepto,
           tipo: m.tipo,
-          tipoPago: m.tipo === "ingreso" ? "Ingreso" : "Egreso",
+          tipoPago: esIngreso ? "Ingreso" : "Egreso",
           usuario: m.usuario,
-          ingreso: m.tipo === "ingreso" ? m.monto : 0,
-          egreso: m.tipo === "egreso" ? m.monto : 0,
+          metodo: m.metodo,
+          ingreso: esIngreso ? monto : 0,
+          egreso: esIngreso ? 0 : monto,
         }
       })
       
@@ -883,6 +1002,12 @@ function NuevoCorteModal({
               </div>
             </div>
 
+            {metodosNuevoCorte.length > 0 && (
+              <div className="mb-4">
+                <DesgloceMetodosKpi metodos={metodosNuevoCorte} />
+              </div>
+            )}
+
             {/* Movimientos Table */}
             <div className="bg-background rounded-lg overflow-hidden">
               {!consulted ? (
@@ -903,8 +1028,8 @@ function NuevoCorteModal({
                   <p className="text-sm text-muted-foreground">No hay movimientos en el rango seleccionado</p>
                 </div>
               ) : (
-                <div className="max-h-72 overflow-y-auto">
-                  <table className="w-full text-left">
+                <div className="max-h-72 overflow-auto">
+                  <table className="min-w-[760px] w-full text-left">
                     <thead className="sticky top-0 bg-background z-10">
                       <tr className="border-b border-border">
                         <th className="px-3 py-2.5 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
@@ -915,6 +1040,9 @@ function NuevoCorteModal({
                         </th>
                         <th className="px-3 py-2.5 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
                           Tipo de pago
+                        </th>
+                        <th className="px-3 py-2.5 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
+                          Método
                         </th>
                         <th className="px-3 py-2.5 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
                           Usuario
@@ -938,6 +1066,11 @@ function NuevoCorteModal({
                           </td>
                           <td className="px-3 py-2 text-xs text-foreground">{m.concepto}</td>
                           <td className="px-3 py-2 text-xs text-foreground">{m.tipoPago}</td>
+                          <td className="px-3 py-2 text-xs text-foreground">
+                            <span className="bg-muted px-2 py-1 rounded-sm text-[9px] font-medium">
+                              {m.metodo || "N/A"}
+                            </span>
+                          </td>
                           <td className="px-3 py-2 text-xs text-foreground">{m.usuario}</td>
                           <td className="px-3 py-2 text-xs font-semibold text-right">
                             <span className={m.ingreso > 0 ? "text-success" : "text-muted-foreground"}>
@@ -959,7 +1092,7 @@ function NuevoCorteModal({
           </div>
 
           {/* Action Buttons */}
-          <div className="flex justify-end gap-3 pt-4 border-t border-border">
+          <div className="grid grid-cols-1 gap-2 pt-4 border-t border-border sm:flex sm:justify-end sm:gap-3">
             <button
               type="button"
               onClick={onClose}
@@ -971,7 +1104,7 @@ function NuevoCorteModal({
               type="button"
               onClick={handleRealizarCorte}
               disabled={!consulted || movimientos.length === 0}
-              className="flex items-center gap-2 px-6 py-2.5 rounded-lg text-xs font-bold uppercase bg-success text-foreground transition-all hover:brightness-110 disabled:opacity-40 disabled:cursor-not-allowed"
+              className="flex items-center justify-center gap-2 px-6 py-2.5 rounded-lg text-xs font-bold uppercase bg-success text-foreground transition-all hover:brightness-110 disabled:opacity-40 disabled:cursor-not-allowed"
               style={{ boxShadow: consulted && movimientos.length > 0 ? "0 0 15px rgba(75, 181, 67, 0.4)" : "none" }}
             >
               <CheckCircle2 className="h-4 w-4" />
@@ -993,20 +1126,25 @@ function DetalleCorteModal({
   corte: CorteDetalle
   onClose: () => void
 }) {
+  const metodosDetalleCorte = useMemo(() => {
+    if (!corte.movimientos || corte.movimientos.length === 0) return []
+    return agruparMovimientosPorMetodo(corte.movimientos)
+  }, [corte.movimientos])
+
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center pt-8 px-4 pb-8 overflow-y-auto">
+    <div className="fixed inset-0 z-50 flex items-start justify-center pt-4 px-3 pb-6 overflow-y-auto sm:pt-8 sm:px-4 sm:pb-8">
       <div className="fixed inset-0 bg-background/85 backdrop-blur-sm" onClick={onClose} />
 
       <div
         className="relative bg-card rounded-xl w-full max-w-3xl overflow-hidden animate-slide-up"
         style={{ boxShadow: "0 25px 50px rgba(0,0,0,0.5)" }}
       >
-        <div className="p-6">
+        <div className="p-4 sm:p-6">
           {/* Header */}
-          <div className="flex items-center justify-between mb-6 pb-4 border-b border-border">
-            <h3 className="text-lg font-bold text-accent flex items-center gap-2">
+          <div className="flex items-center justify-between gap-3 mb-6 pb-4 border-b border-border">
+            <h3 className="min-w-0 text-base sm:text-lg font-bold text-accent flex items-center gap-2">
               <Receipt className="h-5 w-5" />
-              Detalle del Corte {corte.folio}
+              <span className="truncate">Detalle del Corte {corte.folio}</span>
             </h3>
             <button
               onClick={onClose}
@@ -1017,17 +1155,17 @@ function DetalleCorteModal({
           </div>
 
           {/* Info Grid */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 mb-5">
             <div className="bg-background rounded-lg p-3">
               <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Fecha Inicio</p>
               <p className="text-sm font-medium text-foreground">
-                {new Date(corte.fechaInicio).toLocaleString("es-MX")}
+                {formatFechaHora(corte.fechaInicio)}
               </p>
             </div>
             <div className="bg-background rounded-lg p-3">
               <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Fecha Final</p>
               <p className="text-sm font-medium text-foreground">
-                {new Date(corte.fechaFin).toLocaleString("es-MX")}
+                {formatFechaHora(corte.fechaFin, "Caja abierta")}
               </p>
             </div>
             <div className="bg-background rounded-lg p-3">
@@ -1037,13 +1175,13 @@ function DetalleCorteModal({
             <div className="bg-background rounded-lg p-3">
               <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Creado</p>
               <p className="text-sm font-medium text-foreground">
-                {new Date(corte.creado).toLocaleString("es-MX")}
+                {formatFechaHora(corte.creado)}
               </p>
             </div>
           </div>
 
           {/* Totals */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 mb-5">
             <div className="bg-background rounded-lg p-3">
               <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Total Ingresos</p>
               <p className="text-lg font-bold text-success">{formatCurrency(corte.totalIngresos)}</p>
@@ -1061,6 +1199,12 @@ function DetalleCorteModal({
               <p className="text-lg font-bold text-accent">{formatCurrency(corte.cajaFinal)}</p>
             </div>
           </div>
+
+          {metodosDetalleCorte.length > 0 && (
+            <div className="mb-5">
+              <DesgloceMetodosKpi metodos={metodosDetalleCorte} />
+            </div>
+          )}
 
           {/* Observacion */}
           {corte.observaciones && (
@@ -1080,8 +1224,8 @@ function DetalleCorteModal({
             {corte.movimientos.length === 0 ? (
               <p className="text-xs text-muted-foreground text-center py-8">Sin movimientos registrados</p>
             ) : (
-              <div className="max-h-64 overflow-y-auto">
-                <table className="w-full text-left">
+              <div className="max-h-64 overflow-auto">
+                <table className="min-w-[760px] w-full text-left">
                   <thead className="sticky top-0 bg-background z-10">
                     <tr className="border-b border-border">
                       <th className="px-3 py-2 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
@@ -1095,6 +1239,9 @@ function DetalleCorteModal({
                       </th>
                       <th className="px-3 py-2 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
                         Usuario
+                      </th>
+                      <th className="px-3 py-2 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
+                        Método
                       </th>
                       <th className="px-3 py-2 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider text-center">
                         Tipo
@@ -1114,16 +1261,15 @@ function DetalleCorteModal({
                           {m.folioMovimiento}
                         </td>
                         <td className="px-3 py-2 text-xs text-foreground whitespace-nowrap">
-                          {new Date(m.fecha).toLocaleString("es-MX", {
-                            year: "numeric",
-                            month: "2-digit",
-                            day: "2-digit",
-                            hour: "2-digit",
-                            minute: "2-digit",
-                          })}
+                          {formatFechaHoraCorta(m.fecha)}
                         </td>
                         <td className="px-3 py-2 text-xs text-foreground">{m.concepto}</td>
                         <td className="px-3 py-2 text-xs text-foreground">{m.usuario}</td>
+                        <td className="px-3 py-2 text-xs text-foreground">
+                          <span className="bg-muted px-2 py-1 rounded-sm text-[9px] font-medium">
+                            {m.metodo || "N/A"}
+                          </span>
+                        </td>
                         <td className="px-3 py-2 text-xs font-semibold text-center">
                           <span
                             className={`px-2 py-0.5 rounded-full text-[10px] uppercase ${
@@ -1153,7 +1299,7 @@ function DetalleCorteModal({
           <div className="flex justify-end">
             <button
               onClick={onClose}
-              className="px-5 py-2 rounded-lg text-xs font-medium border border-border text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+              className="w-full px-5 py-2.5 rounded-lg text-xs font-medium border border-border text-muted-foreground hover:text-foreground hover:bg-muted transition-colors sm:w-auto"
             >
               Cerrar
             </button>

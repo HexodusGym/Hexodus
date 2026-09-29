@@ -4,6 +4,7 @@
  */
 
 import { AuthService } from '../auth'
+import { getAppTimeZone } from '../timezone'
 
 export interface RegistroFacialRequest {
   tipo: 'IN' | 'OUT'
@@ -44,14 +45,15 @@ export interface RegistroAsistenciaResponse {
       fecha_fin_membresia: string
       vigencia_membresia?: string
       estado_pago?: 'pagado' | 'sin_pagar' | 'pendiente' | string
-    }
+    } | null
     asistencia: {
       id: number
       tipo: 'IN' | 'OUT'
       timestamp: string
       confidence: string
-    }
+    } | null
     motivo_codigo?: string
+    motivo_texto?: string
     sugerencia?: string
   }
   error?: string
@@ -73,7 +75,7 @@ export interface AsistenciasHoyResponse {
       estado_acceso?: 'permitido' | 'denegado' | string
       motivo_codigo?: string
       motivo_texto?: string
-      metodo: 'facial' | 'manual'
+      metodo: 'facial' | 'manual' | 'huella' | string
       confidence?: number
     }>
     resumen: {
@@ -102,7 +104,7 @@ export interface HistorialAsistenciasResponse {
       estado_acceso?: 'permitido' | 'denegado' | string
       motivo_codigo?: string
       motivo_texto?: string
-      metodo: 'facial' | 'manual'
+      metodo: 'facial' | 'manual' | 'huella' | string
       confidence?: number
       kiosk_id?: string
       validador_manual?: string | null
@@ -122,7 +124,7 @@ export interface FiltrosHistorial {
   limite?: number    // Nombre en español para consistencia con la app
   fecha_inicio?: string
   fecha_fin?: string
-  metodo?: 'facial' | 'manual'
+  metodo?: 'facial' | 'manual' | 'huella'
   search?: string
 }
 
@@ -151,7 +153,7 @@ export interface HistorialSocioResponse {
       id: number
       timestamp: string
       tipo: 'IN' | 'OUT'
-      metodo: 'facial' | 'manual'
+      metodo: 'facial' | 'manual' | 'huella' | string
       confidence: number | null
     }>
     estadisticas: {
@@ -214,7 +216,7 @@ class AsistenciaServiceClass {
    */
   private getAuthHeaders(): HeadersInit {
     const token = AuthService.getToken()
-    const zonaHorariaCliente = Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/Mexico_City'
+    const zonaHorariaCliente = getAppTimeZone()
 
     return {
       'Content-Type': 'application/json',

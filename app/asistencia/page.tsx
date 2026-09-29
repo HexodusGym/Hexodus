@@ -21,6 +21,8 @@ import {
   type ConfigRegistro,
   type KpiAsistencia,
   type EstadoMembresia,
+  formatConfidencePercent,
+  getMetodoRegistroLabel,
 } from "@/lib/asistencia-data"
 import type { Socio as SocioTipo } from "@/lib/types/socios"
 
@@ -139,22 +141,8 @@ export default function AsistenciaPage() {
 
         // Transformar datos: /hoy tiene campo 'hora' (string "03:03:36") no 'timestamp'
         const registrosTransformados: RegistroAcceso[] = response.data.asistencias.map((r) => {
-          // Determinar confianza
-          console.log('[HOY] Registro:', {
-            nombre: r.socio_nombre,
-            confidence: r.confidence,
-            confidenceType: typeof r.confidence,
-            allKeys: Object.keys(r)
-          })
-          
-          let confianzaStr = "N/A"
-          if (r.confidence != null) {
-            const conf = r.confidence
-            confianzaStr = conf > 1 ? conf.toFixed(0) : (conf * 100).toFixed(0)
-            console.log('[HOY] Confianza calculada:', confianzaStr)
-          } else {
-            console.warn('[HOY] No hay confidence para:', r.socio_nombre)
-          }
+          const confianzaStr = formatConfidencePercent(r.confidence, 1)
+          const metodoLabel = getMetodoRegistroLabel(r.metodo)
 
           // Construir timestamp desde fecha + hora
           // fecha: "2026-03-09", hora: "03:03:36" -> "2026-03-09T03:03:36"
@@ -172,8 +160,9 @@ export default function AsistenciaPage() {
             motivo:
               override?.motivo ||
               (r as any).motivo_texto ||
-              (esDenegado ? 'Acceso denegado' : (r.metodo === 'facial' ? 'Reconocimiento facial' : 'Registro manual')),
+              (esDenegado ? 'Acceso denegado' : `Registro por ${metodoLabel.toLowerCase()}`),
             confianza: confianzaStr,
+            metodoRegistro: metodoLabel,
             timestamp: timestamp,
             estadoMembresia,
             fotoUrl: r.foto_perfil_url,
@@ -256,22 +245,8 @@ export default function AsistenciaPage() {
 
         // Transformar datos: /asistencia tiene campo 'timestamp' completo
         const registrosTransformados: RegistroAcceso[] = response.data.asistencias.map((r) => {
-          // Determinar confianza
-          console.log('[HISTORIAL] Registro:', {
-            nombre: r.socio_nombre,
-            confidence: r.confidence,
-            confidenceType: typeof r.confidence,
-            allKeys: Object.keys(r)
-          })
-          
-          let confianzaStr = "N/A"
-          if (r.confidence != null) {
-            const conf = r.confidence
-            confianzaStr = conf > 1 ? conf.toFixed(0) : (conf * 100).toFixed(0)
-            console.log('[HISTORIAL] Confianza calculada:', confianzaStr)
-          } else {
-            console.warn('[HISTORIAL] No hay confidence para:', r.socio_nombre)
-          }
+          const confianzaStr = formatConfidencePercent(r.confidence, 1)
+          const metodoLabel = getMetodoRegistroLabel(r.metodo)
 
           const override = overrides[String(r.id)]
           const esDenegado = !!override || esRegistroDenegadoApi({ tipo: r.tipo, estado_acceso: (r as any).estado_acceso, notas: r.notas })
@@ -287,8 +262,9 @@ export default function AsistenciaPage() {
               override?.motivo ||
               (r as any).motivo_texto ||
               r.notas ||
-              (esDenegado ? 'Acceso denegado' : (r.metodo === 'facial' ? 'Reconocimiento facial' : 'Registro manual')),
+              (esDenegado ? 'Acceso denegado' : `Registro por ${metodoLabel.toLowerCase()}`),
             confianza: confianzaStr,
+            metodoRegistro: metodoLabel,
             timestamp: r.timestamp, // Usar timestamp directamente
             estadoMembresia,
             fotoUrl: r.foto_perfil_url,
@@ -439,12 +415,24 @@ export default function AsistenciaPage() {
 
   // Listen for messages from scanner window
   useEffect(() => {
-    const abrirCobroAdeudo = async (registro: RegistroAcceso) => {
-      const socioId = registro.socioDbId
+    const resolverSocioIdRegistro = async (registro: RegistroAcceso): Promise<number | null> => {
+      const idDirecto = Number(registro.socioDbId)
+      if (Number.isInteger(idDirecto) && idDirecto > 0) return idDirecto
 
+      const codigo = String(registro.socioId || '').trim()
+      if (codigo.length < 2 || /^\d+$/.test(codigo)) return null
+
+      const resultados = await SociosService.buscar(codigo)
+      const exacto = resultados.find((item) => item.codigo === codigo)
+      return exacto?.id || resultados[0]?.id || null
+    }
+
+    const abrirCobroAdeudo = async (registro: RegistroAcceso) => {
       if (!puedeCobrarAdeudos) return
 
-      if (!socioId || Number.isNaN(Number(socioId))) {
+      const socioId = await resolverSocioIdRegistro(registro)
+
+      if (!socioId) {
         toast({
           title: "No se pudo abrir cobro",
           description: "No se recibió el ID del socio para registrar el pago pendiente.",
@@ -454,7 +442,7 @@ export default function AsistenciaPage() {
       }
 
       try {
-        const socioCompleto = await SociosService.getById(Number(socioId))
+        const socioCompleto = await SociosService.getById(socioId)
         setSocioAdeudo(socioCompleto)
         setModalCobroAdeudoOpen(true)
       } catch (error: any) {
@@ -629,7 +617,7 @@ export default function AsistenciaPage() {
     <div className="flex h-screen overflow-hidden bg-background">
       <Sidebar activePage="asistencia" />
 
-      <main className="flex-1 overflow-y-auto p-4 md:p-6 flex flex-col gap-5">
+      <main className="flex-1 overflow-y-auto p-3 pb-28 md:p-6 flex flex-col gap-4 md:gap-5">
         <AsistenciaHeader 
           onRegistroManual={puedeRegistrarManual ? () => setModalRegistroManual(true) : undefined}
           onRegistroHuella={() => router.push('/asistencia/huella')}
@@ -644,7 +632,7 @@ export default function AsistenciaPage() {
         />
 
         {/* Main content: Control + History */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-5 flex-1 min-h-0">
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-3 lg:gap-5 flex-1 min-h-0">
           {/* Left: Scanner control + config */}
           <div className="lg:col-span-1">
             <PanelEscaneo
@@ -660,13 +648,13 @@ export default function AsistenciaPage() {
           {/* Right: History with Tabs */}
           <div className="lg:col-span-2">
             {/* Tabs Navigation */}
-            <div 
-              className="flex items-center gap-1 bg-card rounded-lg p-1 mb-4" 
+            <div
+              className="custom-scrollbar mb-4 flex items-stretch gap-1 overflow-x-auto rounded-lg bg-card p-1"
               style={{ boxShadow: "0 2px 8px rgba(0,0,0,0.2)" }}
             >
               <button
                 onClick={() => setTabActivo("hoy")}
-                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all duration-200 ${
+                className={`min-w-[8.5rem] shrink-0 px-3 py-2 text-xs font-medium rounded-md transition-all duration-200 md:min-w-0 md:py-1.5 ${
                   tabActivo === "hoy"
                     ? "bg-primary text-primary-foreground glow-primary"
                     : "text-muted-foreground hover:text-foreground"
@@ -678,7 +666,7 @@ export default function AsistenciaPage() {
                 <>
                   <button
                     onClick={() => setTabActivo("historial")}
-                    className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all duration-200 ${
+                    className={`min-w-[8.5rem] shrink-0 px-3 py-2 text-xs font-medium rounded-md transition-all duration-200 md:min-w-0 md:py-1.5 ${
                       tabActivo === "historial"
                         ? "bg-primary text-primary-foreground glow-primary"
                         : "text-muted-foreground hover:text-foreground"
@@ -688,7 +676,7 @@ export default function AsistenciaPage() {
                   </button>
                   <button
                     onClick={() => setTabActivo("socio")}
-                    className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all duration-200 ${
+                    className={`min-w-[8.5rem] shrink-0 px-3 py-2 text-xs font-medium rounded-md transition-all duration-200 md:min-w-0 md:py-1.5 ${
                       tabActivo === "socio"
                         ? "bg-primary text-primary-foreground glow-primary"
                         : "text-muted-foreground hover:text-foreground"

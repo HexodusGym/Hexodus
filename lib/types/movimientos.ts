@@ -1,9 +1,12 @@
+import { formatHmInTimeZone, formatYmdInTimeZone } from "@/lib/timezone"
+
 // ============================================================
 // TIPOS FRONTEND (camelCase) - Mantener compatibilidad
 // ============================================================
 
 export type TipoMovimiento = "ingreso" | "egreso"
 export type TipoPago = "efectivo" | "transferencia" | "tarjeta"
+export type OrigenMovimiento = "manual" | "automatico_venta" | "automatico_compra" | "automatico_otro"
 
 export interface Movimiento {
   id: string
@@ -16,6 +19,9 @@ export interface Movimiento {
   hora: string // HH:MM
   usuario: string
   observaciones?: string
+  origen?: OrigenMovimiento // manual, automatico_venta, automatico_compra, automatico_otro
+  referenciaId?: number // ID de la venta/compra que generó el movimiento
+  puedeEliminarse?: boolean // Falso para movimientos automáticos o apertura de caja
 }
 
 export interface MovimientoKpis {
@@ -51,6 +57,9 @@ export interface MovimientoAPI {
   monto: number
   metodo: string | null // "N/A", "Efectivo", "Tarjeta", "Transferencia SPEI", etc.
   responsable: string
+  origen?: OrigenMovimiento // manual, automatico_venta, automatico_compra, etc.
+  referencia_id?: number // ID de venta/compra que generó el movimiento
+  referencia_tipo?: string // venta, compra, ajuste, etc.
 }
 
 export interface DashboardStats {
@@ -93,6 +102,34 @@ export function mapMetodoPago(metodoAPI?: string | null): TipoPago {
 }
 
 /**
+ * Detecta si el concepto indica un movimiento automático
+ */
+function detectarOrigenDesdeConcepto(concepto: string): OrigenMovimiento {
+  if (!concepto) return "manual"
+  
+  const conceptoLower = concepto.toLowerCase().trim()
+  
+  // Automático de ventas
+  if (conceptoLower.startsWith("venta de") || conceptoLower.includes("venta #")) {
+    return "automatico_venta"
+  }
+  
+  // Automático de compras
+  if (conceptoLower.startsWith("compra de") || conceptoLower.includes("compra #")) {
+    return "automatico_compra"
+  }
+  
+  // Apertura de caja
+  if (conceptoLower.includes("apertura") || conceptoLower.includes("fondo de caja") || 
+      conceptoLower.includes("fondo inicial") || conceptoLower.includes("capital inicial")) {
+    return "automatico_otro"
+  }
+  
+  // Por defecto, es manual
+  return "manual"
+}
+
+/**
  * Convierte MovimientoAPI (backend) a Movimiento (frontend)
  */
 export function mapMovimientoFromAPI(apiMov: MovimientoAPI): Movimiento {
@@ -105,13 +142,16 @@ export function mapMovimientoFromAPI(apiMov: MovimientoAPI): Movimiento {
     fecha_hora: apiMov.fecha_hora,
   })
 
-  // Parsear fecha_hora: "2026-03-04T03:43:06.029Z"
+  // Parsear fecha_hora y normalizar siempre a la TZ de negocio.
   const fechaHora = apiMov.fecha_hora ? new Date(apiMov.fecha_hora) : null
   const fechaEsValida = !!fechaHora && !Number.isNaN(fechaHora.getTime())
-  const fecha = fechaEsValida ? fechaHora.toISOString().split("T")[0] : ""
-  const hora = fechaEsValida ? fechaHora.toTimeString().slice(0, 5) : ""
+  const fecha = fechaEsValida ? formatYmdInTimeZone(fechaHora) : ""
+  const hora = fechaEsValida ? formatHmInTimeZone(fechaHora) : ""
 
-  const movimientoMapeado = {
+  // Determinar origen: usar del API si viene, si no, detectar desde concepto
+  const origen = apiMov.origen || detectarOrigenDesdeConcepto(apiMov.concepto)
+
+  const movimientoMapeado: Movimiento = {
     id: apiMov.folio, // Usar folio como ID único
     folio: apiMov.folio,
     tipo: (apiMov.tipo || "Ingreso").toLowerCase() as TipoMovimiento,
@@ -122,9 +162,11 @@ export function mapMovimientoFromAPI(apiMov: MovimientoAPI): Movimiento {
     hora,
     usuario: apiMov.responsable,
     observaciones: apiMov.nota_movimiento || undefined,
+    origen, // Usar origen detectado o del API
+    referenciaId: apiMov.referencia_id, // Mapear ID de referencia (venta/compra)
   }
 
-  console.log("✅ Movimiento mapeado:", movimientoMapeado)
+  console.log("✅ Movimiento mapeado:", movimientoMapeado, { origen })
 
   return movimientoMapeado
 }
@@ -307,3 +349,8 @@ export const CONCEPTOS_GASTO: Concepto[] = [
   { id: 14, nombre: "Seguro del local", tipo: "gasto" },
   { id: 15, nombre: "Comisiones bancarias", tipo: "gasto" },
 ]
+
+// ============================================================
+// UTILIDADES PARA RESTRICCIÓN DE ELIMINACIÓN
+// ============================================================
+

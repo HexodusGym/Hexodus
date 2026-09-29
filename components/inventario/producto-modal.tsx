@@ -4,7 +4,7 @@ import { useState, useEffect } from "react"
 import { X, Save, Info, DollarSign, RefreshCw, Plus } from "lucide-react"
 import type { ProductoExtendido } from "@/lib/types/productos"
 import type { Categoria as CategoriaAPI } from "@/lib/types/categorias"
-import type { Categoria } from "@/lib/inventario-data"
+import { toast } from "@/hooks/use-toast"
 import { CategoriaModal } from "./categoria-modal"
 
 interface ProductoModalProps {
@@ -30,7 +30,7 @@ export function ProductoModal({
   const [nombre, setNombre] = useState("")
   const [codigo, setCodigo] = useState("")
   const [categoriaId, setCategoriaId] = useState<number | "">("")
-  const [categoria, setCategoria] = useState<Categoria | "">("")
+  const [categoria, setCategoria] = useState("")
   const [marca, setMarca] = useState("")
   const [precioCompra, setPrecioCompra] = useState("")
   const [precioVenta, setPrecioVenta] = useState("")
@@ -38,6 +38,10 @@ export function ProductoModal({
   const [stockMinimo, setStockMinimo] = useState("")
   const [descripcion, setDescripcion] = useState("")
   const [codigoEditado, setCodigoEditado] = useState(false) // Para saber si el usuario editó manualmente el código
+
+  const handleNumberWheel = (e: React.WheelEvent<HTMLInputElement>) => {
+    e.currentTarget.blur()
+  }
   
   // Modal de categoría inline
   const [categoriaModalOpen, setCategoriaModalOpen] = useState(false)
@@ -118,9 +122,9 @@ export function ProductoModal({
 
     onSave({
       ...(producto ? { id: producto.id } : {}),
-      nombre, 
+      nombre,
       codigo,
-      categoria: categoria as Categoria,
+      categoria,
       categoriaId: typeof categoriaId === 'number' ? categoriaId : undefined,
       marca: marca || "Sin marca",
       precioCompra: parseFloat(precioCompra),
@@ -232,7 +236,7 @@ export function ProductoModal({
                       const id = e.target.value ? parseInt(e.target.value) : ""
                       setCategoriaId(id)
                       const cat = categorias.find(c => c.id === id)
-                      setCategoria((cat?.nombre as Categoria) || "")
+                      setCategoria(cat?.nombre || "")
                       
                       if (!codigoEditado && !isEdit && cat) {
                         const prefijo = generarPrefijo(cat.nombre)
@@ -295,6 +299,7 @@ export function ProductoModal({
                     min="0" 
                     value={precioCompra} 
                     onChange={(e) => setPrecioCompra(e.target.value)}
+                    onWheel={handleNumberWheel}
                     placeholder="0.00"
                     className="w-full pl-7 pr-4 py-2.5 bg-background border border-border rounded-lg text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all" 
                   />
@@ -314,6 +319,7 @@ export function ProductoModal({
                     min="0" 
                     value={precioVenta} 
                     onChange={(e) => setPrecioVenta(e.target.value)}
+                    onWheel={handleNumberWheel}
                     placeholder="0.00"
                     className="w-full pl-7 pr-4 py-2.5 bg-background border border-border rounded-lg text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all" 
                   />
@@ -329,6 +335,7 @@ export function ProductoModal({
                   min="0" 
                   value={stockActual} 
                   onChange={(e) => setStockActual(e.target.value)}
+                  onWheel={handleNumberWheel}
                   placeholder="0"
                   className="w-full px-4 py-2.5 bg-background border border-border rounded-lg text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all" 
                 />
@@ -343,6 +350,7 @@ export function ProductoModal({
                   min="0" 
                   value={stockMinimo} 
                   onChange={(e) => setStockMinimo(e.target.value)}
+                  onWheel={handleNumberWheel}
                   placeholder="5"
                   className="w-full px-4 py-2.5 bg-background border border-border rounded-lg text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all" 
                 />
@@ -393,7 +401,7 @@ export function ProductoModal({
           onSuccess={async (nuevaCategoria) => {
             // Auto-seleccionar la categoría recién creada
             setCategoriaId(nuevaCategoria.id)
-            setCategoria(nuevaCategoria.nombre as Categoria)
+            setCategoria(nuevaCategoria.nombre)
             
             // Auto-generar código con el nuevo prefijo si aplica
             if (!codigoEditado && !isEdit && nuevaCategoria.prefijo) {

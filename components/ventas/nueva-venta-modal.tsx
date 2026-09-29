@@ -5,6 +5,7 @@ import { X, Search, Plus, Minus, Trash2, User, Package, PlusCircle, Users, Shopp
 import { SociosService } from "@/lib/services/socios"
 import { ProductosService } from "@/lib/services/productos"
 import { MetodosPagoService } from "@/lib/services/socios"
+import { DualPaymentSelector, type PagoSplitRequest } from "@/components/payment/dual-payment-selector"
 import type { Socio } from "@/lib/types/socios"
 import type { ProductoExtendido } from "@/lib/types/productos"
 import type { MetodoPago } from "@/lib/types/socios"
@@ -20,7 +21,8 @@ interface NuevaVentaModalProps {
   onClose: () => void
   onConfirm: (data: {
     socio_id: number | null
-    metodo_pago_id: number
+    pagos?: PagoSplitRequest[]
+    metodo_pago_id?: number  // Legacy support
     productos: { producto_id: number; cantidad: number }[]
   }) => void
 }
@@ -33,7 +35,7 @@ export function NuevaVentaModal({ open, onClose, onConfirm }: NuevaVentaModalPro
   
   // Estados del formulario
   const [socioSeleccionado, setSocioSeleccionado] = useState<Socio | null>(null)
-  const [metodoPagoId, setMetodoPagoId] = useState<number | "">("")
+  const [pagosSeleccionados, setPagosSeleccionados] = useState<PagoSplitRequest[]>([])
   const [productosSeleccionados, setProductosSeleccionados] = useState<ProductoSeleccionado[]>([])
   
   // Estados de búsqueda
@@ -168,14 +170,14 @@ export function NuevaVentaModal({ open, onClose, onConfirm }: NuevaVentaModalPro
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     
-    if (!metodoPagoId || productosSeleccionados.length === 0) {
-      alert('Debes seleccionar un método de pago y al menos un producto')
+    if (pagosSeleccionados.length === 0 || productosSeleccionados.length === 0) {
+      alert('Debes seleccionar al menos un método de pago y un producto')
       return
     }
 
     onConfirm({
       socio_id: socioSeleccionado?.id || null,
-      metodo_pago_id: metodoPagoId as number,
+      pagos: pagosSeleccionados,
       productos: productosSeleccionados.map(item => ({
         producto_id: item.producto.id,
         cantidad: item.cantidad
@@ -188,7 +190,7 @@ export function NuevaVentaModal({ open, onClose, onConfirm }: NuevaVentaModalPro
 
   function resetForm() {
     setSocioSeleccionado(null)
-    setMetodoPagoId("")
+    setPagosSeleccionados([])
     setProductosSeleccionados([])
     setBusquedaSocio("")
     setBusquedaProducto("")
@@ -197,7 +199,7 @@ export function NuevaVentaModal({ open, onClose, onConfirm }: NuevaVentaModalPro
   if (!open) return null
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center pt-4 px-4 pb-4 overflow-y-auto">
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto px-3 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-[calc(env(safe-area-inset-top)+1rem)] md:px-4 md:pb-4 md:pt-4">
       {/* Backdrop */}
       <div
         className="fixed inset-0 bg-background/85 backdrop-blur-sm"
@@ -206,144 +208,38 @@ export function NuevaVentaModal({ open, onClose, onConfirm }: NuevaVentaModalPro
 
       {/* Modal */}
       <div
-        className="relative bg-card rounded-xl w-full max-w-4xl overflow-hidden animate-slide-up shadow-2xl my-4"
+        className="relative my-2 max-h-[calc(100dvh-2rem)] w-full max-w-5xl overflow-y-auto rounded-xl bg-card shadow-2xl animate-slide-up md:my-4"
       >
-        <div className="p-6">
-          {/* Header */}
-          <div className="flex items-center justify-between mb-6 pb-4 border-b border-border">
-            <h3 className="text-xl font-bold text-primary flex items-center gap-2">
-              <ShoppingCart className="h-5 w-5" />
-              Registrar Nueva Venta
-            </h3>
-            <button
-              onClick={onClose}
-              className="text-muted-foreground hover:text-foreground transition-colors p-1"
-            >
-              <X className="h-5 w-5" />
-            </button>
-          </div>
+        {/* Header */}
+        <div className="sticky top-0 z-30 flex items-center justify-between border-b border-border bg-muted/95 p-4 backdrop-blur md:p-6">
+          <h3 className="flex min-w-0 items-center gap-2 text-lg font-bold text-primary md:text-xl">
+            <ShoppingCart className="h-5 w-5" />
+            <span className="truncate">Registrar Nueva Venta</span>
+          </h3>
+          <button
+            onClick={onClose}
+            className="text-muted-foreground hover:text-foreground transition-colors p-1"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
 
-          <form onSubmit={handleSubmit} className="space-y-6">
-            {/* Sección 1: Cliente y Método de Pago */}
-            <div className="grid grid-cols-2 gap-6">
-              {/* Cliente */}
-              <div className="space-y-3">
-                <h4 className="text-sm font-semibold text-muted-foreground flex items-center gap-2">
-                  <Users className="h-4 w-4 text-accent" />
-                  Cliente (opcional)
-                </h4>
-
-                <div className="relative">
-                  <label htmlFor="busqueda-socio" className="block text-xs font-medium mb-1.5 text-muted-foreground">
-                    Buscar Socio
-                  </label>
-                  <div className="relative">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                    <input
-                      type="text"
-                      id="busqueda-socio"
-                      value={busquedaSocio}
-                      onChange={(e) => {
-                        setBusquedaSocio(e.target.value)
-                        setSocioSeleccionado(null)
-                        setShowSociosSuggestions(true)
-                      }}
-                      onFocus={() => setShowSociosSuggestions(true)}
-                      onBlur={handleSocioBlur}
-                      placeholder="Buscar por nombre o código..."
-                      className="w-full pl-9 pr-3 py-2.5 bg-background border border-border rounded-lg text-foreground text-sm placeholder:text-muted-foreground focus:border-accent focus:ring-0 focus:outline-none transition-colors"
-                    />
-                    
-                    {/* Sugerencias de socios */}
-                    {showSociosSuggestions && sociosFiltrados.length > 0 && (
-                      <div className="absolute top-full left-0 right-0 mt-1 bg-card border border-border rounded-lg overflow-hidden z-20 max-h-48 overflow-y-auto shadow-lg">
-                        {sociosFiltrados.map((socio) => (
-                          <button
-                            key={socio.id}
-                            type="button"
-                            onClick={() => seleccionarSocio(socio)}
-                            className="w-full px-3 py-2.5 text-left hover:bg-accent/10 transition-colors border-b border-border last:border-b-0"
-                          >
-                            <div className="text-sm font-medium text-foreground">{socio.nombre}</div>
-                            <div className="text-xs text-muted-foreground mt-0.5">
-                              {socio.codigoSocio} · {socio.email}
-                            </div>
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                  
-                  {/* Socio seleccionado */}
-                  {socioSeleccionado && (
-                    <div className="mt-2 flex items-center justify-between bg-accent/10 px-3 py-2 rounded-lg">
-                      <div>
-                        <div className="text-sm font-medium text-foreground">{socioSeleccionado.nombre}</div>
-                        <div className="text-xs text-muted-foreground">{socioSeleccionado.codigoSocio}</div>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={limpiarSocio}
-                        className="text-muted-foreground hover:text-destructive transition-colors"
-                      >
-                        <X className="h-4 w-4" />
-                      </button>
-                    </div>
-                  )}
-                  
-                  {!socioSeleccionado && (
-                    <p className="mt-1.5 text-xs text-muted-foreground">
-                      Deja vacío para "Público General"
-                    </p>
-                  )}
-                </div>
-              </div>
-
-              {/* Método de Pago */}
-              <div className="space-y-3">
-                <h4 className="text-sm font-semibold text-muted-foreground flex items-center gap-2">
+        {/* Contenido en dos columnas */}
+        <div className="flex flex-col md:h-[calc(100vh-180px)] md:max-h-[650px] md:flex-row md:overflow-y-auto">
+          {/* COLUMNA IZQUIERDA: Productos */}
+          <div className="flex flex-col border-border p-4 md:flex-1 md:border-r md:p-6 md:overflow-hidden">
+            <form onSubmit={handleSubmit} className="flex flex-col md:flex-1">
+              {/* Buscador de productos */}
+              <div className="mb-4">
+                <h4 className="text-sm font-semibold mb-3 text-muted-foreground flex items-center gap-2">
                   <Package className="h-4 w-4 text-accent" />
-                  Método de Pago
+                  Agregar Productos
                 </h4>
 
-                <div>
-                  <label htmlFor="metodo-pago" className="block text-xs font-medium mb-1.5 text-muted-foreground">
-                    Método de Pago <span className="text-destructive">*</span>
-                  </label>
-                  <select
-                    id="metodo-pago"
-                    value={metodoPagoId}
-                    onChange={(e) => setMetodoPagoId(Number(e.target.value))}
-                    required
-                    className="w-full px-3 py-2.5 bg-background border border-border rounded-lg text-foreground text-sm appearance-none focus:border-accent focus:ring-0 focus:outline-none transition-colors cursor-pointer"
-                  >
-                    <option value="">Selecciona un método...</option>
-                    {metodosPago.map((metodo) => (
-                      <option key={metodo.metodo_pago_id} value={metodo.metodo_pago_id}>
-                        {metodo.nombre}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-            </div>
-
-            {/* Sección 2: Búsqueda de productos */}
-            <div>
-              <h4 className="text-sm font-semibold mb-3 text-muted-foreground flex items-center gap-2">
-                <Package className="h-4 w-4 text-accent" />
-                Agregar Productos
-              </h4>
-
-              <div className="relative">
-                <label htmlFor="busqueda-producto" className="block text-xs font-medium mb-1.5 text-muted-foreground">
-                  Buscar Producto
-                </label>
                 <div className="relative">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                   <input
                     type="text"
-                    id="busqueda-producto"
                     value={busquedaProducto}
                     onChange={(e) => {
                       setBusquedaProducto(e.target.value)
@@ -351,13 +247,13 @@ export function NuevaVentaModal({ open, onClose, onConfirm }: NuevaVentaModalPro
                     }}
                     onFocus={() => setShowProductosSuggestions(true)}
                     onBlur={handleProductoBlur}
-                    placeholder="Buscar por nombre o código..."
+                    placeholder="Buscar producto..."
                     className="w-full pl-9 pr-3 py-2.5 bg-background border border-border rounded-lg text-foreground text-sm placeholder:text-muted-foreground focus:border-accent focus:ring-0 focus:outline-none transition-colors"
                   />
                   
                   {/* Sugerencias de productos */}
                   {showProductosSuggestions && productosFiltrados.length > 0 && (
-                    <div className="absolute top-full left-0 right-0 mt-1 bg-card border border-border rounded-lg overflow-hidden z-20 max-h-60 overflow-y-auto shadow-lg">
+                    <div className="absolute left-0 right-0 top-full z-40 mt-2 max-h-48 overflow-y-auto rounded-lg border border-border bg-card shadow-lg">
                       {productosFiltrados.map((producto) => (
                         <button
                           key={producto.id}
@@ -366,13 +262,13 @@ export function NuevaVentaModal({ open, onClose, onConfirm }: NuevaVentaModalPro
                           className="w-full px-3 py-2.5 text-left hover:bg-accent/10 transition-colors border-b border-border last:border-b-0"
                         >
                           <div className="flex items-center justify-between">
-                            <div className="flex-1">
-                              <div className="text-sm font-medium text-foreground">{producto.nombre}</div>
+                            <div className="flex-1 min-w-0">
+                              <div className="text-sm font-medium text-foreground truncate">{producto.nombre}</div>
                               <div className="text-xs text-muted-foreground mt-0.5">
                                 {producto.codigo} · Stock: {producto.stockActual}
                               </div>
                             </div>
-                            <div className="text-sm font-semibold text-accent">
+                            <div className="text-sm font-semibold text-accent whitespace-nowrap ml-2">
                               {formatCurrency(producto.precioVenta)}
                             </div>
                           </div>
@@ -382,97 +278,203 @@ export function NuevaVentaModal({ open, onClose, onConfirm }: NuevaVentaModalPro
                   )}
                 </div>
               </div>
-            </div>
 
-            {/* Sección 3: Productos seleccionados */}
-            {productosSeleccionados.length > 0 && (
-              <div>
-                <h4 className="text-sm font-semibold mb-3 text-muted-foreground flex items-center gap-2">
-                  <ShoppingCart className="h-4 w-4 text-accent" />
-                  Productos Seleccionados ({productosSeleccionados.length})
+              {/* Lista de productos seleccionados */}
+              <div className="flex flex-col md:flex-1 md:overflow-hidden">
+                {productosSeleccionados.length > 0 ? (
+                  <>
+                    <h4 className="text-xs font-semibold mb-3 text-muted-foreground uppercase tracking-wider">
+                      Productos Seleccionados ({productosSeleccionados.length})
+                    </h4>
+                    <div className="max-h-72 space-y-2 overflow-y-auto pr-1 md:max-h-none md:flex-1 md:pr-2">
+                      {productosSeleccionados.map((item) => (
+                        <div
+                          key={item.producto.id}
+                          className="grid grid-cols-[1fr_auto] gap-3 rounded-lg border border-border bg-background p-3 transition-colors hover:border-accent/30 sm:flex sm:items-center sm:gap-2"
+                        >
+                          {/* Nombre y detalles */}
+                          <div className="flex-1 min-w-0">
+                            <div className="text-sm font-medium text-foreground truncate">{item.producto.nombre}</div>
+                            <div className="text-xs text-muted-foreground mt-0.5">
+                              {formatCurrency(item.producto.precioVenta)} c/u
+                            </div>
+                          </div>
+
+                          {/* Controles de cantidad */}
+                          <div className="flex items-center gap-1 rounded bg-muted/50 px-2 py-1">
+                            <button
+                              type="button"
+                              onClick={() => cambiarCantidad(item.producto.id, item.cantidad - 1)}
+                              className="p-0.5 hover:bg-accent/10 rounded transition-colors text-muted-foreground hover:text-foreground"
+                              disabled={item.cantidad <= 1}
+                            >
+                              <Minus className="h-3 w-3" />
+                            </button>
+                            <span className="text-xs font-medium w-6 text-center">
+                              {item.cantidad}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => cambiarCantidad(item.producto.id, item.cantidad + 1)}
+                              className="p-0.5 hover:bg-accent/10 rounded transition-colors text-muted-foreground hover:text-foreground"
+                              disabled={item.cantidad >= item.producto.stockActual}
+                            >
+                              <Plus className="h-3 w-3" />
+                            </button>
+                          </div>
+
+                          {/* Subtotal */}
+                          <div className="text-right text-sm font-semibold text-foreground sm:min-w-[4rem]">
+                            {formatCurrency(item.producto.precioVenta * item.cantidad)}
+                          </div>
+
+                          {/* Eliminar */}
+                          <button
+                            type="button"
+                            onClick={() => eliminarProducto(item.producto.id)}
+                            className="p-1 hover:bg-destructive/10 rounded transition-colors text-muted-foreground hover:text-destructive flex-shrink-0"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                ) : (
+                  <div className="flex min-h-44 items-center justify-center md:flex-1">
+                    <div className="text-center py-8">
+                      <Package className="h-12 w-12 text-muted-foreground/30 mx-auto mb-2" />
+                      <p className="text-sm text-muted-foreground">
+                        Busca y agrega productos para comenzar
+                      </p>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </form>
+          </div>
+
+          {/* COLUMNA DERECHA: Cliente y Pago */}
+          <div className="flex w-full flex-col overflow-visible border-t border-border bg-muted/20 p-4 md:w-100 md:overflow-y-auto md:border-t-0 md:p-6">
+            <form onSubmit={handleSubmit} className="flex flex-col space-y-4">
+              {/* Cliente */}
+              <div className="space-y-3">
+                <h4 className="text-sm font-semibold text-muted-foreground flex items-center gap-2">
+                  <User className="h-4 w-4 text-accent" />
+                  Cliente
                 </h4>
 
-                <div className="space-y-2 max-h-64 overflow-y-auto pr-2">
-                  {productosSeleccionados.map((item) => (
-                    <div
-                      key={item.producto.id}
-                      className="flex items-center gap-3 bg-background p-3 rounded-lg border border-border"
-                    >
-                      <div className="flex-1">
-                        <div className="text-sm font-medium text-foreground">{item.producto.nombre}</div>
-                        <div className="text-xs text-muted-foreground mt-0.5">
-                          {formatCurrency(item.producto.precioVenta)} c/u · Stock: {item.producto.stockActual}
-                        </div>
-                      </div>
-
-                      {/* Controles de cantidad */}
-                      <div className="flex items-center gap-2">
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <input
+                    type="text"
+                    value={busquedaSocio}
+                    onChange={(e) => {
+                      setBusquedaSocio(e.target.value)
+                      setSocioSeleccionado(null)
+                      setShowSociosSuggestions(true)
+                    }}
+                    onFocus={() => setShowSociosSuggestions(true)}
+                    onBlur={handleSocioBlur}
+                    placeholder="Buscar Socio..."
+                    className="w-full pl-9 pr-3 py-2.5 bg-background border border-border rounded-lg text-foreground text-sm placeholder:text-muted-foreground focus:border-accent focus:ring-0 focus:outline-none transition-colors"
+                  />
+                  
+                  {/* Sugerencias de socios */}
+                  {showSociosSuggestions && sociosFiltrados.length > 0 && (
+                    <div className="absolute left-0 right-0 top-full z-40 mt-2 max-h-40 overflow-y-auto rounded-lg border border-border bg-card shadow-lg">
+                      {sociosFiltrados.map((socio) => (
                         <button
+                          key={socio.id}
                           type="button"
-                          onClick={() => cambiarCantidad(item.producto.id, item.cantidad - 1)}
-                          className="p-1 hover:bg-accent/10 rounded transition-colors"
-                          disabled={item.cantidad <= 1}
+                          onClick={() => seleccionarSocio(socio)}
+                          className="w-full px-3 py-2.5 text-left hover:bg-accent/10 transition-colors border-b border-border last:border-b-0"
                         >
-                          <Minus className="h-4 w-4 text-muted-foreground" />
+                          <div className="text-sm font-medium text-foreground">{socio.nombre}</div>
+                          <div className="text-xs text-muted-foreground mt-0.5">
+                            {socio.codigoSocio}
+                          </div>
                         </button>
-                        <span className="text-sm font-medium min-w-[2rem] text-center">
-                          {item.cantidad}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => cambiarCantidad(item.producto.id, item.cantidad + 1)}
-                          className="p-1 hover:bg-accent/10 rounded transition-colors"
-                          disabled={item.cantidad >= item.producto.stockActual}
-                        >
-                          <Plus className="h-4 w-4 text-muted-foreground" />
-                        </button>
-                      </div>
-
-                      {/* Subtotal */}
-                      <div className="text-sm font-semibold text-foreground min-w-[5rem] text-right">
-                        {formatCurrency(item.producto.precioVenta * item.cantidad)}
-                      </div>
-
-                      {/* Eliminar */}
-                      <button
-                        type="button"
-                        onClick={() => eliminarProducto(item.producto.id)}
-                        className="p-1 hover:bg-destructive/10 rounded transition-colors text-muted-foreground hover:text-destructive"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
+                      ))}
                     </div>
-                  ))}
+                  )}
                 </div>
 
-                {/* Total */}
-                <div className="mt-4 pt-4 border-t border-border">
-                  <div className="flex items-center justify-between">
-                    <span className="text-base font-semibold text-foreground">Total a Cobrar:</span>
+                {/* Socio seleccionado */}
+                {socioSeleccionado ? (
+                  <div className="flex items-center justify-between bg-accent/10 px-3 py-2 rounded-lg border border-accent/20">
+                    <div>
+                      <div className="text-sm font-medium text-foreground">{socioSeleccionado.nombre}</div>
+                      <div className="text-xs text-muted-foreground">{socioSeleccionado.codigoSocio}</div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={limpiarSocio}
+                      className="text-muted-foreground hover:text-destructive transition-colors p-0.5"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+                ) : (
+                  <p className="text-xs text-muted-foreground px-1">
+                    Deja vacío para "Público General"
+                  </p>
+                )}
+              </div>
+
+              {/* Separador */}
+              <div className="border-t border-border" />
+
+              {/* Método de Pago */}
+              <div className="space-y-3 flex-1 flex flex-col">
+
+                {productosSeleccionados.length > 0 ? (
+                  <div className="overflow-visible md:flex-1 md:overflow-y-auto">
+                    <DualPaymentSelector
+                      total={total}
+                      metodosPago={metodosPago}
+                      onPagosChange={setPagosSeleccionados}
+                      labelText="Métodos de Pago"
+                    />
+                  </div>
+                ) : (
+                  <div className="p-3 bg-background border border-border rounded-lg text-center">
+                    <p className="text-xs text-muted-foreground">
+                      Agrega productos para configurar pago
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              {/* Total */}
+              {productosSeleccionados.length > 0 && (
+                <div className="pt-3 border-t border-border">
+                  <div className="flex items-center justify-between mb-4">
+                    <span className="text-sm font-semibold text-foreground">Total a Cobrar:</span>
                     <span className="text-2xl font-bold text-accent">{formatCurrency(total)}</span>
                   </div>
                 </div>
-              </div>
-            )}
+              )}
 
-            {/* Botones */}
-            <div className="flex gap-3 pt-4">
-              <button
-                type="button"
-                onClick={onClose}
-                className="flex-1 px-4 py-3 bg-background border border-border text-foreground rounded-lg hover:bg-accent/5 transition-colors font-medium"
-              >
-                Cancelar
-              </button>
-              <button
-                type="submit"
-                disabled={!metodoPagoId || productosSeleccionados.length === 0}
-                className="flex-1 px-4 py-3 bg-accent text-accent-foreground rounded-lg hover:bg-accent/90 transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                Registrar Venta
-              </button>
-            </div>
-          </form>
+              {/* Botones */}
+              <div className="sticky bottom-0 z-20 -mx-4 grid grid-cols-2 gap-2 border-t border-border bg-card/95 px-4 pb-1 pt-3 backdrop-blur md:static md:mx-0 md:flex md:border-0 md:bg-transparent md:p-0 md:pt-2 md:backdrop-blur-0">
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="flex-1 px-3 py-2.5 bg-background border border-border text-foreground rounded-lg hover:bg-accent/5 transition-colors font-medium text-sm"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={pagosSeleccionados.length === 0 || productosSeleccionados.length === 0}
+                  className="flex-1 px-3 py-2.5 bg-accent text-accent-foreground rounded-lg hover:bg-accent/90 transition-colors font-medium text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Registrar Venta
+                </button>
+              </div>
+            </form>
+          </div>
         </div>
       </div>
     </div>

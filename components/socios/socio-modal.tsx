@@ -14,7 +14,9 @@ import { ImprimirTicketModal } from "./imprimir-ticket-modal"
 import { CapturaFacialModal } from "./captura-facial-modal"
 import { CapturaHuellaModal } from "./captura-huella-modal"
 import { toast } from "@/hooks/use-toast"
+import { addYearsToYmd, getTodayYmdInTimeZone } from "@/lib/timezone"
 import type { Socio, CreateSocioRequest, CotizacionResponse } from "@/lib/types/socios"
+import type { PagoSplitRequest } from "@/components/payment/dual-payment-selector"
 import type { Membresia } from "@/lib/types/membresias"
 
 // ============================================================
@@ -102,22 +104,13 @@ export function SocioModal({ open, onClose, onSuccess, socio }: SocioModalProps)
   // ===== Funciones auxiliares para manejo de fechas =====
   // Obtener fecha actual en formato YYYY-MM-DD
   const obtenerFechaActual = () => {
-    const hoy = new Date()
-    const year = hoy.getFullYear()
-    const month = String(hoy.getMonth() + 1).padStart(2, '0')
-    const day = String(hoy.getDate()).padStart(2, '0')
-    return `${year}-${month}-${day}`
+    return getTodayYmdInTimeZone()
   }
 
   // Calcular fecha + 1 año en formato YYYY-MM-DD
   const calcularFechaUnAnoDespues = (fechaInicio: string) => {
     if (!fechaInicio) return ""
-    const fecha = new Date(fechaInicio + 'T00:00:00') // Evitar problemas de zona horaria
-    fecha.setFullYear(fecha.getFullYear() + 1)
-    const year = fecha.getFullYear()
-    const month = String(fecha.getMonth() + 1).padStart(2, '0')
-    const day = String(fecha.getDate()).padStart(2, '0')
-    return `${year}-${month}-${day}`
+    return addYearsToYmd(fechaInicio, 1)
   }
 
   // Formatear fechas sin problemas de zona horaria
@@ -533,50 +526,65 @@ export function SocioModal({ open, onClose, onSuccess, socio }: SocioModalProps)
   }
 
   // ===== STEP 4: Confirmar pago y registrar socio =====
-  const handleConfirmarPago = async (metodoPagoId: number, nombreMetodoPago: string) => {
+  const handleConfirmarPago = async (metodoPagoIdOrPagos: number | PagoSplitRequest[], nombreMetodoPago?: string) => {
     if (!datosTemporales || !cotizacion) return
-    
-    console.log('💳 Confirmando pago para nuevo socio:')
-    console.log('   Método de pago ID:', metodoPagoId)
-    console.log('   Método de pago:', nombreMetodoPago)
-    console.log('   Total a cobrar:', cotizacion.desglose_cobro.total_a_pagar)
-    console.log('   Plan:', cotizacion.nombre_plan)
-    
+
     setLoading(true)
     try {
-      const datosFinales: CreateSocioRequest = {
-        ...datosTemporales,
-        membresia: {
-          ...datosTemporales.membresia,
-          estado_pago: "pagado", // ✅ EXPlÍCITO: Usuario confirmó pago
-          metodo_pago_id: metodoPagoId,
-        },
+      console.log('💳 Confirmando pago para nuevo socio:')
+
+      let datosFinales: CreateSocioRequest
+
+      if (Array.isArray(metodoPagoIdOrPagos)) {
+        // Split payments
+        const pagos = metodoPagoIdOrPagos as PagoSplitRequest[]
+        const totalPagado = pagos.reduce((s, p) => s + (p.monto || 0), 0)
+        console.log('   Pagos split:', pagos, 'totalPagado:', totalPagado)
+
+        datosFinales = {
+          ...datosTemporales,
+          membresia: {
+            ...datosTemporales.membresia,
+            estado_pago: "pagado",
+            pagos: pagos,
+          },
+        }
+        setMetodoPagoNombre((nombreMetodoPago as string) || pagos.map(p => p.metodo_pago_id).join(' + '))
+      } else {
+        // Single payment method
+        const metodoPagoId = metodoPagoIdOrPagos as number
+        console.log('   Método de pago ID:', metodoPagoId)
+        datosFinales = {
+          ...datosTemporales,
+          membresia: {
+            ...datosTemporales.membresia,
+            estado_pago: "pagado",
+            metodo_pago_id: metodoPagoId,
+          },
+        }
+        setMetodoPagoNombre(nombreMetodoPago || '')
       }
-      
-      console.log('📤 Enviando registro con pago confirmado')
-      console.log('   estado_pago:', 'pagado')
-      console.log('   metodo_pago_id:', metodoPagoId)
-      
+
+      console.log('📤 Enviando registro con pago confirmado', datosFinales.membresia)
       const response = await SociosService.create(datosFinales)
-      await sincronizarMotorSiHayHuella(datosFinales.biometria.fingerprint_template)
-      
+      await sincronizarMotorSiHayHuella(datosFinales.biometria?.fingerprint_template)
+
       toast({
         title: "¡Socio registrado!",
         description: `${nombre} ha sido inscrito exitosamente y el pago fue registrado.`,
       })
-      
+
       // Guardar datos para impresión
       setDatosSocioCreado({
         nombre: nombre,
         codigoSocio: response.codigo_socio || "N/A",
         ...datosFinales
       })
-      setMetodoPagoNombre(nombreMetodoPago)
-      
+
       // Cerrar checkout y mostrar modal de impresión
       setShowCheckout(false)
       setShowImprimirTicket(true)
-      
+
     } catch (error: any) {
       console.error("Error al registrar socio:", error)
       toast({

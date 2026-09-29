@@ -22,6 +22,14 @@ export interface MovimientoCaja {
   usuario: string
 }
 
+// Desglose de ingresos/egresos por método de pago
+export interface DesgloceMetodo {
+  metodo: string
+  ingresos: number
+  egresos: number
+  neto: number
+}
+
 // ============================================================
 // API REQUESTS
 // ============================================================
@@ -65,8 +73,9 @@ export interface ConsultarCajaResponse {
     total_egresos: number
     efectivo_inicial: number
     efectivo_final: number
+    desglose_metodos: DesgloceMetodo[]
   }
-  movimientos: MovimientoCaja[]
+  movimientos: Array<MovimientoCaja & { metodo: string }>
 }
 
 // Respuesta al cerrar caja
@@ -92,7 +101,7 @@ export interface CorteAPI {
   id: number
   folio: string
   fecha_inicio: string // ISO 8601
-  fecha_fin: string // ISO 8601
+  fecha_fin: string | null // ISO 8601 | null cuando la caja esta abierta
   ingresos: number
   egresos: number
   caja_inicial: number
@@ -112,6 +121,7 @@ export interface MovimientoAPI {
   tipo: "ingreso" | "gasto" | "egreso"
   monto: number
   usuario: string
+  metodo: string
 }
 
 // Detalle completo de corte desde el API
@@ -120,7 +130,7 @@ export interface CorteDetalleAPI {
   folio: string
   estado: string
   fecha_inicio: string // ISO 8601
-  fecha_fin: string // ISO 8601
+  fecha_fin: string | null // ISO 8601 | null cuando la caja esta abierta
   usuario: string
   creado: string // ISO 8601
   total_ingresos: number
@@ -150,7 +160,7 @@ export interface DashboardStatsCortes {
   }
   cortes_realizados: {
     total: number
-    ultimo: string // ISO 8601
+    ultimo: string | null // ISO 8601
   }
 }
 
@@ -175,7 +185,7 @@ export interface CorteCaja {
   id: number
   folio: string
   fechaInicio: string
-  fechaFin: string
+  fechaFin: string | null
   ingresos: number
   egresos: number
   cajaInicial: number
@@ -195,6 +205,7 @@ export interface Movimiento {
   tipo: "ingreso" | "gasto" | "egreso"
   monto: number
   usuario: string
+  metodo: string
 }
 
 // Detalle completo de corte para frontend (camelCase)
@@ -203,7 +214,7 @@ export interface CorteDetalle {
   folio: string
   estado: string
   fechaInicio: string
-  fechaFin: string
+  fechaFin: string | null
   usuario: string
   creado: string
   totalIngresos: number
@@ -250,6 +261,7 @@ export function mapMovimientoFromAPI(apiMovimiento: MovimientoAPI): Movimiento {
     tipo: apiMovimiento.tipo,
     monto: apiMovimiento.monto,
     usuario: apiMovimiento.usuario,
+    metodo: apiMovimiento.metodo,
   }
 }
 

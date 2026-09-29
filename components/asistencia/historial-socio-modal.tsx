@@ -7,20 +7,27 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/ui/avatar"
 import { Badge } from "@/ui/badge"
 import { ScrollArea } from "@/ui/scroll-area"
 import { Separator } from "@/ui/separator"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/ui/select"
 import { AsistenciaService, HistorialSocioResponse } from "@/lib/services/asistencia"
+import { formatConfidencePercent, getMetodoRegistroLabel } from "@/lib/asistencia-data"
+import {
+  exportarAsistenciasArchivo,
+  getNombreArchivoHistorialSocio,
+  type FormatoExportacionAsistencias,
+} from "@/lib/export-asistencias"
 import { 
   Loader2, 
   Calendar, 
   Clock, 
-  TrendingUp, 
-  Award, 
   AlertCircle,
-  ChevronLeft,
-  ChevronRight,
   FileDown
 } from "lucide-react"
-import { format } from "date-fns"
-import { es } from "date-fns/locale"
 
 interface HistorialSocioModalProps {
   open: boolean
@@ -39,6 +46,7 @@ export function HistorialSocioModal({
   const [data, setData] = useState<HistorialSocioResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [paginaActual, setPaginaActual] = useState(1)
+  const [formatoExportacion, setFormatoExportacion] = useState<FormatoExportacionAsistencias>("XLSX")
 
   // Cargar historial cuando se abre el modal
   useEffect(() => {
@@ -77,44 +85,76 @@ export function HistorialSocioModal({
   }
 
   const handleExportar = async () => {
-    if (!socioId) return
+    if (!data?.data?.socio || !data?.data?.asistencias?.length) return
 
-    try {
-      await AsistenciaService.exportar('excel', {
-        tipo: `socio-${socioId}`
-      })
-    } catch (err: any) {
-      console.error("Error al exportar:", err)
-    }
+    const socio = data.data.socio
+    exportarAsistenciasArchivo({
+      registros: data.data.asistencias.map((registro) => ({
+        timestamp: registro.timestamp,
+        nombreSocio: socio.nombreCompleto,
+        socioId: socio.codigoSocio,
+        tipo: registro.tipo,
+        metodoRegistro: getMetodoRegistroLabel(registro.metodo),
+        confianza: registro.confidence !== null ? formatConfidencePercent(registro.confidence, 1) : "N/A",
+        motivo: "Historial de socio",
+      })),
+      formato: formatoExportacion,
+      nombreArchivoBase: getNombreArchivoHistorialSocio(socio.codigoSocio),
+      titulo: "Historial de Asistencias por Socio",
+      metadata: [
+        ["Socio", socio.nombreCompleto],
+        ["Codigo", socio.codigoSocio],
+      ],
+    })
   }
 
   const renderEstadisticas = () => {
     if (!data?.data?.estadisticas) return null
 
-    const { estadisticas, asistencias } = data.data
+    const { estadisticas } = data.data
+    const ultimaAsistencia = new Date(estadisticas.ultima_asistencia)
 
     return (
-      <div className="grid grid-cols-2 gap-3">
-        <div className="rounded-lg border bg-card p-3">
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Calendar className="h-4 w-4" />
-            <span>Total Asistencias</span>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div className="rounded-xl border border-border/70 bg-gradient-to-br from-card to-card/70 p-4 shadow-sm">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-[11px] uppercase tracking-wide text-muted-foreground font-medium">
+                Total Asistencias
+              </p>
+              <p className="mt-2 text-3xl leading-none font-bold text-foreground">{estadisticas.total_mostradas}</p>
+              <p className="mt-2 text-xs text-muted-foreground">Registros encontrados</p>
+            </div>
+            <div className="h-9 w-9 rounded-lg bg-accent/15 text-accent flex items-center justify-center">
+              <Calendar className="h-4 w-4" />
+            </div>
           </div>
-          <p className="mt-1 text-2xl font-bold">{estadisticas.total_mostradas}</p>
         </div>
 
-        <div className="rounded-lg border bg-card p-3">
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Clock className="h-4 w-4" />
-            <span>Última Asistencia</span>
+        <div className="rounded-xl border border-border/70 bg-gradient-to-br from-card to-card/70 p-4 shadow-sm">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-[11px] uppercase tracking-wide text-muted-foreground font-medium">
+                Última Asistencia
+              </p>
+              <p className="mt-2 text-xl leading-tight font-semibold text-foreground">
+                {ultimaAsistencia.toLocaleDateString("es-MX", {
+                  day: "2-digit",
+                  month: "short",
+                  year: "numeric",
+                })}
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {ultimaAsistencia.toLocaleTimeString("es-MX", {
+                  hour: "2-digit",
+                  minute: "2-digit",
+                })}
+              </p>
+            </div>
+            <div className="h-9 w-9 rounded-lg bg-primary/15 text-primary flex items-center justify-center">
+              <Clock className="h-4 w-4" />
+            </div>
           </div>
-          <p className="mt-1 text-sm font-bold">
-            {new Date(estadisticas.ultima_asistencia).toLocaleDateString('es-MX', {
-              day: '2-digit',
-              month: 'short',
-              year: 'numeric'
-            })}
-          </p>
         </div>
       </div>
     )
@@ -135,38 +175,49 @@ export function HistorialSocioModal({
     return (
       <ScrollArea className="h-[400px] pr-4">
         <div className="space-y-2">
-          {data.data.asistencias.map((registro, index) => {
+          {data.data.asistencias.map((registro) => {
             const fecha = new Date(registro.timestamp)
             const tipo = registro.tipo === 'IN' ? 'permitido' : 'denegado'
+            const metodoLabel = getMetodoRegistroLabel(registro.metodo)
             
             return (
               <div
                 key={registro.id}
-                className="flex items-center justify-between rounded-lg border bg-card p-3 hover:bg-accent/50 transition-colors"
+                className="flex items-center justify-between gap-3 rounded-xl border border-border/70 bg-gradient-to-br from-card to-card/80 p-3.5 hover:border-accent/40 hover:bg-accent/5 transition-colors"
               >
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-3 min-w-0 flex-1">
                   <div
-                    className={`flex h-10 w-10 items-center justify-center rounded-full ${
+                    className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${
                       tipo === 'permitido'
-                        ? 'bg-green-100 text-green-700'
-                        : 'bg-red-100 text-red-700'
+                        ? 'bg-emerald-500/15 text-emerald-400'
+                        : 'bg-red-500/15 text-red-400'
                     }`}
                   >
                     {tipo === 'permitido' ? '✓' : '✗'}
                   </div>
 
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-medium">
+                  <div className="space-y-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-sm font-semibold text-foreground">
                         {fecha.toLocaleDateString('es-MX', {
                           day: '2-digit',
                           month: 'short',
                           year: 'numeric'
                         })}
                       </span>
+                      <Badge
+                        variant="outline"
+                        className={`h-5 px-2 text-[10px] font-medium ${
+                          tipo === 'permitido'
+                            ? 'border-emerald-500/40 text-emerald-400 bg-emerald-500/10'
+                            : 'border-red-500/40 text-red-400 bg-red-500/10'
+                        }`}
+                      >
+                        {tipo === 'permitido' ? 'Entrada' : 'Salida'}
+                      </Badge>
                     </div>
 
-                    <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                    <div className="flex items-center gap-3 text-xs text-muted-foreground flex-wrap">
                       <span className="flex items-center gap-1">
                         <Clock className="h-3 w-3" />
                         {fecha.toLocaleTimeString('es-MX', {
@@ -175,25 +226,24 @@ export function HistorialSocioModal({
                         })}
                       </span>
                       <span className="flex items-center gap-1">
-                        {registro.metodo === 'facial' ? '👤' : '✋'}
-                        {registro.metodo === 'facial' ? 'Facial' : 'Manual'}
+                        {metodoLabel === 'Facial' ? '👤' : metodoLabel === 'Huella' ? '🖐️' : '✋'}
+                        {metodoLabel}
                       </span>
                     </div>
 
                     {registro.confidence !== null && (
                       <div className="text-xs text-muted-foreground">
-                        Confianza: {(registro.confidence * 100).toFixed(1)}%
+                        Confianza: {formatConfidencePercent(registro.confidence, 1)}%
                       </div>
                     )}
                   </div>
                 </div>
 
-                <div className="text-right">
-                  <span className={`text-xs font-medium ${
-                    tipo === 'permitido' ? 'text-green-600' : 'text-red-600'
-                  }`}>
-                    {tipo === 'permitido' ? 'Entrada' : 'Salida'}
-                  </span>
+                <div className="text-right shrink-0">
+                  <p className="text-[11px] text-muted-foreground">Registro</p>
+                  <p className={`text-xs font-semibold ${tipo === 'permitido' ? 'text-emerald-400' : 'text-red-400'}`}>
+                    {tipo === 'permitido' ? 'Permitido' : 'Denegado'}
+                  </p>
                 </div>
               </div>
             )
@@ -210,28 +260,56 @@ export function HistorialSocioModal({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl max-h-[90vh]">
-        <DialogHeader>
-          <DialogTitle className="flex items-center justify-between">
-            <span className="flex items-center gap-2">
-              <Calendar className="h-5 w-5" />
-              Historial de Asistencias
-            </span>
-            {data && canExportar && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleExportar}
-                disabled={loading}
-              >
-                <FileDown className="mr-2 h-4 w-4" />
-                Exportar
-              </Button>
-            )}
-          </DialogTitle>
-          <DialogDescription>
-            Consulta el historial completo de asistencias del socio
-          </DialogDescription>
+      <DialogContent className="w-[min(94vw,880px)] max-w-[min(94vw,880px)] max-h-[90vh] overflow-y-auto overflow-x-hidden">
+        <DialogHeader className="space-y-3 pb-2 border-b border-border/60">
+          <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2">
+            <div>
+              <DialogTitle className="flex items-center gap-2">
+                <Calendar className="h-5 w-5" />
+                Historial de Asistencias
+              </DialogTitle>
+              <DialogDescription className="mt-1">
+                Consulta el historial completo de asistencias del socio
+              </DialogDescription>
+            </div>
+          </div>
+
+          {data && canExportar && (
+            <div className="rounded-lg border border-border bg-muted/20 p-3 space-y-2">
+              <p className="text-xs font-medium text-foreground">Exportar historial</p>
+
+              <div className="flex flex-col sm:flex-row sm:items-center gap-2 w-full">
+                <Select
+                  value={formatoExportacion}
+                  onValueChange={(value) => setFormatoExportacion(value as FormatoExportacionAsistencias)}
+                >
+                  <SelectTrigger className="h-9 w-full sm:w-[250px] text-xs bg-background">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="XLSX">Excel (.xlsx) - Recomendado</SelectItem>
+                    <SelectItem value="PDF">PDF (imprimible)</SelectItem>
+                  </SelectContent>
+                </Select>
+
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleExportar}
+                  disabled={loading}
+                  className="sm:min-w-[160px] justify-center"
+                >
+                  <FileDown className="mr-2 h-4 w-4" />
+                  {formatoExportacion === "XLSX" && "Exportar Excel"}
+                  {formatoExportacion === "PDF" && "Exportar PDF"}
+                </Button>
+              </div>
+
+              <p className="text-[11px] text-muted-foreground">
+                Excel para editar o PDF para imprimir.
+              </p>
+            </div>
+          )}
         </DialogHeader>
 
         {loading && !data && (
