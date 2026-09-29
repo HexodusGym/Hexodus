@@ -1,6 +1,8 @@
 # Hexodus - Sistema de Gestión de Gimnasio
 
-Actualización preparada para producción: [cambios, validaciones, despliegue y reversión del frontend (2026-09-26)](docs/RELEASE_FRONTEND_2026-09-26.md).
+Actualización de asistencias: [exportación completa a Excel, cambios y validaciones (2026-09-29)](docs/RELEASE_FRONTEND_2026-09-29.md).
+
+Entrega anterior: [cambios, validaciones, despliegue y reversión del frontend (2026-09-26)](docs/RELEASE_FRONTEND_2026-09-26.md).
 
 Sistema moderno de gestión integral para gimnasios desarrollado con Next.js 16, React, TypeScript y Tailwind CSS.
 
