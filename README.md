@@ -1,5 +1,7 @@
 # Hexodus - Sistema de Gestión de Gimnasio
 
+Actualización de usuarios: [cambio de contraseña, validaciones y entrega (2026-10-07)](docs/RELEASE_FRONTEND_2026-10-07.md).
+
 Actualización de asistencias: [exportación completa a Excel, cambios y validaciones (2026-09-29)](docs/RELEASE_FRONTEND_2026-09-29.md).
 
 Entrega anterior: [cambios, validaciones, despliegue y reversión del frontend (2026-09-26)](docs/RELEASE_FRONTEND_2026-09-26.md).
