@@ -43,7 +43,8 @@ export interface Biometria {
   foto_perfil_url?: string
   face_encoding?: number[]
   face_encoding_updated_at?: string
-  fingerprint_template?: string
+  fingerprint_template?: string | null
+  enrollment_proof?: string
   fingerprint_updated_at?: string
 }
 
