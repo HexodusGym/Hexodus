@@ -1,4 +1,5 @@
 import { apiGet, apiPost, apiPut, apiDelete, apiDownload } from '@/lib/api'
+import { notificarCambioBiometrico } from '@/lib/motor-huella'
 import { getMetodosPago as getMetodosPagoConfiguracion } from '@/lib/services/metodos-pago'
 import type {
   Socio,
@@ -243,6 +244,7 @@ export class SociosService {
     console.log('📤 Nuevo estado:', estado)
     
     const response = await apiPut<SocioResponse>(`/socios/${id}/estado`, { estado })
+    notificarCambioBiometrico()
     console.log('✅ Estado actualizado:', response)
     
     if (!response.data) {
