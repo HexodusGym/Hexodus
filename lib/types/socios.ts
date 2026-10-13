@@ -56,6 +56,7 @@ export interface MembresiaSocio {
   fecha_inicio: string // ISO date
   estado_pago: EstadoPago
   metodo_pago_id?: number
+  pagos?: { metodo_pago_id: number; monto: number }[]
 }
 
 /**
@@ -313,7 +314,7 @@ export function mapSocioFromAPI(api: SocioAPI): Socio {
     // Si no viene (o viene null/undefined), asumimos que el pago está pendiente para evitar marcar al socio como pagado accidentalmente.
     estadoPago: ((api as any).estado_pago ?? (api as any).estadoPago) as EstadoPago || 'sin_pagar',
     estadoSocio,
-    // Campos adicionales del detalle 
+    // Campos adicionales del detalle
     vigenciaMembresia: api.vigencia_membresia,
     estadoContrato: api.estado_contrato,
     bioRostro: api.biometrico_rostro,
@@ -330,7 +331,7 @@ export function mapSocioListItemFromAPI(api: SocioListItemAPI): Socio {
   let genero: Genero = 'Masculino'
   if (api.genero === 'Femenino') genero = 'Femenino'
   else if (api.genero === 'Otro') genero = 'Otro'
-  
+
   // Determinar estado del socio según vigencia
   let estadoSocio: EstadoSocio = 'activo'
   if (api.vigencia.toLowerCase().includes('vencida')) estadoSocio = 'inactivo'
